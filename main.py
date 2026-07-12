@@ -20,6 +20,7 @@ import audio
 import hotkey
 import snaptrade_client_wrapper as st
 import state
+import trading
 import transcribe
 import ui
 from assistant import answer, spoken_part
@@ -95,6 +96,7 @@ class Snappy(rumps.App):
         self.wired = False
         self.icon_state = None
         self.target = None  # strong ref: PyObjC won't retain the click target
+        self.want_confirm = False  # a worker asks the main thread to reopen the mic
 
         self.menu = ["Ask Snappy", "Show panel", None]
 
@@ -113,6 +115,7 @@ class Snappy(rumps.App):
     def wire(self):
         """Take over the status-item click, and start listening for ⌥."""
         ui.set_on_ask(self.ask_text)
+        ui.set_on_trade(self.confirm_from_panel, self.cancel_from_panel)
 
         item = self._nsapp.nsstatusitem
         self.menu_ref = item.menu()  # keep it; we re-attach it for right-clicks
@@ -155,6 +158,12 @@ class Snappy(rumps.App):
             self.wired = True
 
         self.set_icon(state.STATE["status"])
+
+        # A worker proposed a trade and wants the mic reopened to hear a yes. Only
+        # the main thread may do that — starting a recording shows the panel.
+        if self.want_confirm and not self.recording:
+            self.want_confirm = False
+            self.start("confirm")
 
         # Don't touch the dirty flag until the page can actually receive the
         # update — building the snapshot clears it, and a push into a half-loaded
@@ -256,11 +265,15 @@ class Snappy(rumps.App):
             return
         self.recording = True
         self.trigger = trigger
-        state.start_question()
+        # A confirmation isn't a new question — clearing state here would wipe the
+        # order that's being confirmed right off the screen.
+        if trigger != "confirm":
+            state.start_question()
         state.update(status="listening")
         ui.show()
 
     def stop(self):
+        was = self.trigger
         self.recording = False
         self.trigger = None
         state.update(status="thinking", level=0.0)
@@ -269,10 +282,15 @@ class Snappy(rumps.App):
         wav = audio.stop_recording()
         if wav is None or not heard:
             state.update(status="idle")
-            say_now("I didn't hear anything.")
+            if was == "confirm":
+                # Silence is not consent. Say nothing, place nothing.
+                self.resolve_trade(confirmed=False, heard="")
+            else:
+                say_now("I didn't hear anything.")
             return
 
-        threading.Thread(target=self.run_voice, args=(wav,), daemon=True).start()
+        target = self.run_confirm if was == "confirm" else self.run_voice
+        threading.Thread(target=target, args=(wav,), daemon=True).start()
 
     def ask_text(self, question):
         """A question typed into the panel — no mic, no Whisper."""
@@ -319,12 +337,76 @@ class Snappy(rumps.App):
 
         say_now(spoken_part(reply))  # only the first paragraph is meant to be heard
 
+        # Claude may have PROPOSED a trade. It cannot place one. If there's an order
+        # waiting, reopen the mic and listen for a yes — but ask the main thread to
+        # do it, because starting a recording touches the panel and AppKit is
+        # main-thread only.
+        order = trading.pending()
+        if order:
+            state.update(pending=order, status="confirming")
+            self.want_confirm = True
+            return
+
         state.finish_question()
         state.update(status="idle")
 
     def say_soon(self, text):
         """Speak filler without blocking the search that's already running."""
-        threading.Thread(target=speak, args=(text,), daemon=True).start()
+        threading.Thread(target=say_soon, args=(text,), daemon=True).start()
+
+    # --- confirming a trade -------------------------------------------------
+    # The model is not involved in any of this. It proposed an order; whether that
+    # order executes is decided here, by a regex, from what the user actually said.
+
+    def run_confirm(self, wav):
+        try:
+            said = transcribe.transcribe(wav)
+        except Exception as e:
+            print("ERROR transcribing confirmation:", e)
+            said = ""
+        print(f"confirmation heard: {said!r}")
+        self.resolve_trade(trading.is_confirmation(said), said)
+
+    def resolve_trade(self, confirmed, heard=""):
+        """Place the pending order, or don't. Called from a worker or the bridge."""
+        if not confirmed:
+            trading.cancel()
+            state.update(pending=None, status="answered")
+            say_now("Cancelled. I didn't place anything." if heard
+                    else "I didn't catch a yes, so I didn't place anything.")
+        else:
+            try:
+                filled = trading.confirm()
+                shares = filled["units"]
+                verb = "Bought" if filled["action"] == "BUY" else "Sold"
+                price = filled.get("price") or filled.get("estimated_cost", 0) / max(shares, 1)
+                message = (
+                    f"Done. {verb} {shares:g} shares of {filled['symbol']}"
+                    f" at about {price:,.0f} dollars."
+                )
+                state.update(pending=None, answer=f"{message}\n\nOrder {filled.get('status') or 'submitted'}.")
+            except trading.TradeRefused as e:
+                message = str(e)
+                state.update(pending=None, answer=message)
+            except Exception as e:
+                print("ERROR placing order:", e)
+                message = "The order didn't go through. Nothing was placed."
+                state.update(pending=None, answer=message)
+            say_now(message)
+
+        self.refresh_portfolio()
+        state.finish_question()
+        state.update(status="idle")
+
+    def confirm_from_panel(self):
+        threading.Thread(
+            target=self.resolve_trade, args=(True, "confirm"), daemon=True
+        ).start()
+
+    def cancel_from_panel(self):
+        threading.Thread(
+            target=self.resolve_trade, args=(False, "cancel"), daemon=True
+        ).start()
 
 
 if __name__ == "__main__":

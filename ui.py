@@ -22,6 +22,8 @@ _delegate = None  # keep strong refs; PyObjC won't retain these for us
 _bridge = None
 _ready = False  # the page must finish loading before JS can be pushed
 _on_ask = None
+_on_confirm = None
+_on_cancel = None
 
 
 class _Panel(AppKit.NSPanel):
@@ -60,6 +62,12 @@ class _Bridge(NSObject):
             text = (body.get("text") or "").strip()
             if text and _on_ask:
                 _on_ask(text)
+        elif kind == "confirm":  # the Confirm button on a proposed trade
+            if _on_confirm:
+                _on_confirm()
+        elif kind == "cancel":
+            if _on_cancel:
+                _on_cancel()
         elif kind == "close":  # the ✕, or Escape
             hide()
 
@@ -73,6 +81,12 @@ def set_on_ask(callback):
     """callback(text) — fired when a question is typed into the panel."""
     global _on_ask
     _on_ask = callback
+
+
+def set_on_trade(confirm, cancel):
+    """The Confirm / Cancel buttons on a proposed trade."""
+    global _on_confirm, _on_cancel
+    _on_confirm, _on_cancel = confirm, cancel
 
 
 def _corner():

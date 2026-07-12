@@ -151,6 +151,85 @@ def get_portfolio_summary(account_id=None):
     }
 
 
+def resolve_symbol(symbol, account_id=None):
+    """Ticker -> SnapTrade's universal_symbol_id, plus the live price.
+
+    One call gets both, because the quote endpoint already returns the symbol
+    object with its id — and a trade preview needs the id, not the ticker.
+    """
+    account_id = account_id or _default_account_id()
+    quotes = _client.trading.get_user_account_quotes(
+        account_id=account_id,
+        symbols=symbol.strip().upper(),
+        use_ticker=True,
+        **_USER,
+    ).body
+    if not quotes:
+        raise RuntimeError(f"{symbol.upper()} isn't a symbol this brokerage can trade.")
+
+    q = quotes[0]
+    sym = dict(q.get("symbol") or {})
+    return {
+        "universal_symbol_id": sym.get("id"),
+        "symbol": sym.get("symbol"),
+        "description": sym.get("description"),
+        "price": q.get("last_trade_price"),
+    }
+
+
+def preview_trade(action, symbol, units, account_id=None):
+    """Ask the brokerage what this order WOULD do. Places nothing.
+
+    Returns a trade_id minted by SnapTrade from these exact parameters. That id is
+    the only thing place_previewed_trade will accept — which is what makes it
+    impossible for the order that executes to differ from the order that was
+    previewed and read aloud.
+    """
+    account_id = account_id or _default_account_id()
+    resolved = resolve_symbol(symbol, account_id)
+
+    impact = _client.trading.get_order_impact(
+        account_id=account_id,
+        action=action.upper(),                 # BUY | SELL
+        universal_symbol_id=resolved["universal_symbol_id"],
+        order_type="Market",
+        time_in_force="Day",
+        units=float(units),
+        **_USER,
+    ).body
+
+    trade = dict(impact.get("trade") or {})
+    return {
+        "trade_id": trade.get("id"),
+        "action": action.upper(),
+        "symbol": resolved["symbol"],
+        "description": resolved["description"],
+        "units": float(units),
+        "price": resolved["price"],
+        "estimated_cost": round(float(units) * (resolved["price"] or 0), 2),
+        "estimated_commission": impact.get("estimated_commission"),
+        "remaining_cash": impact.get("remaining_cash"),
+    }
+
+
+def place_previewed_trade(trade_id):
+    """Execute a previously previewed trade. THE ONLY EXECUTION PATH IN THIS APP.
+
+    Takes an id, never raw order parameters — so nothing can slip a different
+    symbol or size in between the preview and the fill. (The SDK also exposes
+    place_force_order, which skips validation entirely. It is never called.)
+    """
+    result = _client.trading.place_order(trade_id=trade_id, **_USER).body
+    return {
+        "order_id": result.get("brokerage_order_id"),
+        "status": result.get("status"),
+        "symbol": ((result.get("universal_symbol") or {}).get("symbol")),
+        "units": result.get("total_quantity") or result.get("units"),
+        "filled_units": result.get("filled_quantity"),
+        "price": result.get("execution_price") or result.get("price"),
+    }
+
+
 def list_connections():
     """The user's brokerage connections and their health."""
     conns = _client.connections.list_brokerage_authorizations(**_USER).body

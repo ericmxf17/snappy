@@ -21,6 +21,7 @@ STATE = {
     "cash": None,
     "positions": [],
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
+    "pending": None,  # a proposed trade awaiting your yes — see trading.py
     "dirty": True,
 }
 

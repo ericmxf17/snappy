@@ -150,6 +150,27 @@
   body[data-hotkey="off"] #banner { display: block; }
   body[data-hotkey="off"] .opt { opacity: .38; text-decoration: line-through; }
 
+  /* ---- proposed trade -------------------------------------------------- */
+  /* Deliberately the loudest thing on screen. This is the only card that can
+     move money, and the dollar cost is the headline because that's the figure
+     that makes a misheard "fifty" for "fifteen" obvious. */
+  .trade { border: 1px solid rgba(224,163,64,.55); background: rgba(224,163,64,.09);
+           border-radius: 11px; padding: 12px; }
+  .trade .top { display: flex; align-items: baseline; gap: 7px; }
+  .trade .act { font: 600 11px "SF Pro Text", sans-serif; letter-spacing: .08em;
+                text-transform: uppercase; color: var(--amber); }
+  .trade .sym { font: 600 15px ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); }
+  .trade .qty { font-size: 12px; color: var(--dim); margin-left: auto; }
+  .trade .cost { font: 500 24px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
+                 color: var(--text); margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .trade .of { font-size: 11px; color: var(--dim); margin-top: 3px; }
+  .trade .row2 { display: flex; gap: 8px; margin-top: 11px; }
+  .trade button { flex: 1; border: 0; border-radius: 8px; padding: 8px;
+                  font: 600 12px "SF Pro Text", sans-serif; cursor: pointer; }
+  .trade .go { background: var(--amber); color: #14110B; }
+  .trade .no { background: rgba(255,255,255,.10); color: var(--text); }
+  .trade .say { text-align: center; font-size: 11px; color: var(--faint); margin-top: 8px; }
+
   /* ---- composer -------------------------------------------------------- */
   #composer { flex: none; display: flex; align-items: center; gap: 8px;
               background: rgba(255,255,255,.05); border: 1px solid var(--line);
@@ -280,11 +301,35 @@
       ${srcHTML(t.sources || [])}
     </div>`;
 
+  // The confirmation card. Nothing here can place an order — the buttons only
+  // post a message; Python decides. See trading.py.
+  const tradeHTML = (t, total) => {
+    const pct = total ? (100 * t.estimated_cost / total) : null;
+    return `<div class="trade">
+      <div class="top">
+        <span class="act">${esc(t.action)}</span>
+        <span class="sym">${esc(t.symbol)}</span>
+        <span class="qty">${t.units} share${t.units == 1 ? '' : 's'}</span>
+      </div>
+      <div class="cost">${money(t.estimated_cost)}</div>
+      <div class="of">
+        ${pct != null ? `${pct.toFixed(2)}% of your portfolio` : ''}
+        ${t.price != null ? ` · at ${money(t.price)}/share` : ''}
+      </div>
+      <div class="row2">
+        <button class="go" id="btnGo">Confirm</button>
+        <button class="no" id="btnNo">Cancel</button>
+      </div>
+      <div class="say">or just say “confirm”</div>
+    </div>`;
+  };
+
   window.setState = (s) => {
     document.body.dataset.status = s.status;
     document.body.dataset.hotkey = s.hotkey_ok === false ? 'off' : 'on';
     document.getElementById('statusText').textContent = {
-      idle: 'Ready', listening: 'Listening', thinking: 'Working', answered: 'Ready',
+      idle: 'Ready', listening: 'Listening', thinking: 'Working',
+      answered: 'Ready', confirming: 'Confirm?',
     }[s.status] || 'Ready';
 
     document.getElementById('value').textContent = money(s.total_value);
@@ -294,6 +339,7 @@
     const live = s.question || s.answer;
     const parts = [];
 
+    if (s.pending) parts.push(tradeHTML(s.pending, s.total_value));
     if (live) parts.push(turnHTML(s, s.status === 'thinking'));
     for (const h of s.history) parts.push(turnHTML(h, false));
 
@@ -319,6 +365,14 @@
     }
 
     feed.innerHTML = parts.join('');
+
+    // The feed is rebuilt on every push, so the buttons are new elements each
+    // time and have to be re-bound. They only post a message — Python decides
+    // whether anything is placed.
+    const go = document.getElementById('btnGo');
+    const no = document.getElementById('btnNo');
+    if (go) go.onclick = () => send({type: 'confirm'});
+    if (no) no.onclick = () => send({type: 'cancel'});
   };
 </script>
 </body>

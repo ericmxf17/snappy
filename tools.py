@@ -8,6 +8,7 @@ import time
 
 import snaptrade_client_wrapper as st
 import state
+import trading
 
 # Anthropic runs these two server-side — no function to implement, no scraping.
 # They're what let Snappy answer questions SnapTrade has no data for: private
@@ -101,6 +102,52 @@ TOOLS = [
     },
 ]
 
+TOOLS.append(
+    {
+        "name": "preview_trade",
+        "description": (
+            "PROPOSE a trade and get its cost and impact. This does NOT place the "
+            "order — nothing is bought or sold. Use it whenever the user asks to buy "
+            "or sell ('buy 5 shares of Apple', 'sell my Nvidia'). Report the cost and "
+            "the resulting portfolio weight, and tell them to say 'confirm'. You have "
+            "no way to place an order yourself, and you must never claim one was "
+            "placed — the app does that, only after the user confirms out loud."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["BUY", "SELL"],
+                    "description": "Whether to buy or sell.",
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Ticker symbol, e.g. AAPL for Apple.",
+                },
+                "units": {
+                    "type": "number",
+                    "description": "Number of shares.",
+                },
+            },
+            "required": ["action", "symbol", "units"],
+        },
+    }
+)
+
+
+def _preview_trade(action, symbol, units):
+    """Claude's only trading tool — and it cannot execute anything.
+
+    A refusal is returned as TEXT rather than raised, so Claude can explain out loud
+    why it won't do it instead of the question dying with a stack trace.
+    """
+    try:
+        return trading.propose(action, symbol, units)
+    except trading.TradeRefused as e:
+        return f"Refused: {e}"
+
+
 DISPATCH = {
     "get_portfolio_summary": st.get_portfolio_summary,
     "get_account_balance": st.get_account_balance,
@@ -108,6 +155,10 @@ DISPATCH = {
     "get_quote": st.get_quote,
     "list_connections": st.list_connections,
     "list_supported_brokerages": st.list_supported_brokerages,
+    # NOTE: there is deliberately NO "place_trade" here. Execution lives in
+    # trading.confirm(), called by main.py after the user confirms — never by the
+    # model. See trading.py's header for why.
+    "preview_trade": _preview_trade,
 }
 
 
