@@ -8,6 +8,7 @@ glass panel.
 Run with:  ./venv/bin/python main.py
 """
 
+import os
 import subprocess
 import threading
 
@@ -17,6 +18,7 @@ import rumps
 from Foundation import NSObject
 
 import audio
+import config
 import hotkey
 import snaptrade_client_wrapper as st
 import state
@@ -406,7 +408,11 @@ class Snappy(rumps.App):
 
     def run_confirm(self, wav):
         try:
-            said = transcribe.transcribe(wav)
+            # NO vocabulary prompt here. The usual one ends "...or say confirm or
+            # cancel", and Whisper parrots its prompt when the audio is mostly
+            # silence — which a confirmation window is. That hallucinated the very
+            # words this step authorises on.
+            said = transcribe.transcribe(wav, prompt="")
         except Exception as e:
             print("ERROR transcribing confirmation:", e)
             said = ""
@@ -483,5 +489,28 @@ class Snappy(rumps.App):
         ).start()
 
 
+def _build():
+    """Which commit is actually running.
+
+    Python doesn't hot-reload, so an app left open after an edit is running the old
+    code — which has now sent us chasing three bugs that were already fixed. Print
+    it, and stop guessing.
+    """
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
+        ).stdout.strip()
+        return f"{sha}{'+dirty' if dirty else ''}"
+    except Exception:
+        return "unknown"
+
+
 if __name__ == "__main__":
+    print(f"Snappy — build {_build()}, model {config.CLAUDE_MODEL}")
+    print("Hold right ⌥ to talk. Right-click the icon to quit.\n")
     Snappy().run()

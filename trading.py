@@ -45,12 +45,20 @@ _YES = re.compile(
     re.IGNORECASE,
 )
 
-# What counts as "no". Anything that is neither a yes nor a no means "I didn't
-# understand" — and that leaves the order standing rather than destroying it. A
-# mis-transcription (or Snappy hearing its own voice through the speakers) must not
-# be able to cancel a trade the user actually wanted.
+# What counts as "no". Anchored to the WHOLE utterance, exactly like _YES.
+#
+# It used to be a substring search, and that was a real bug: the word "cancel"
+# appearing anywhere in a mis-transcription killed the order. Whisper hallucinates
+# its own prompt back on near-silent audio, and the prompt said "...or say confirm
+# or cancel" — so a silent confirmation window could invent a cancellation. (It
+# could just as easily have invented a CONFIRMATION, which is why both patterns are
+# anchored, and why the confirmation step now transcribes with no prompt at all.)
+#
+# Anything that is neither a yes nor a no means "I didn't understand", and that
+# leaves the order standing rather than destroying it.
 _NO = re.compile(
-    r"\b(no|nope|nah|cancel|stop|forget it|never ?mind|don'?t|do not)\b",
+    r"^\W*((no|nope|nah|cancel|stop|forget it|never ?mind)[\s,.!]*)+"
+    r"(thanks?|thank you)?\W*$|^\W*(actually,? )?no\b.*$|^\W*don'?t.*$",
     re.IGNORECASE,
 )
 

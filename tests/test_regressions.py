@@ -40,6 +40,20 @@ def test_no_holdings_still_produces_a_valid_prompt():
     assert "buy or sell" in transcribe._prompt   # the buy/by fix must survive
 
 
+def test_transcribe_can_be_asked_for_no_prompt_at_all():
+    """The confirmation step MUST be able to transcribe with no vocabulary priming.
+
+    Whisper parrots its prompt back when the audio is mostly silence — and a
+    confirmation window is mostly silence. The normal prompt ends "...or say
+    confirm or cancel", i.e. the exact words the trade authorisation matches on.
+    A hallucinated "cancel" silently killed orders; a hallucinated "confirm" would
+    have placed one nobody asked for.
+    """
+    import inspect
+    sig = inspect.signature(transcribe.transcribe)
+    assert "prompt" in sig.parameters, "run_confirm relies on passing prompt=''"
+
+
 def test_prompt_primes_the_trading_verbs():
     """"buy" and "by" are homophones. Without priming, Whisper drops the verb:
     "buy five shares of Apple" -> "BY five shares of Apple". A trade command

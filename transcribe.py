@@ -74,11 +74,20 @@ def set_hints(held):
     _prompt = f"{CONTEXT} The user currently holds {', '.join(held)}."
 
 
-def transcribe(wav_path: str) -> str:
+def transcribe(wav_path: str, prompt=None) -> str:
+    """Transcribe a WAV. Pass prompt="" to disable vocabulary priming entirely.
+
+    That escape hatch is not cosmetic. Whisper parrots its prompt back when it has
+    little else to go on, and a confirmation recording is mostly silence. Priming it
+    with a sentence containing the words "confirm" and "cancel" — the exact words the
+    trade authorisation matches on — means near-silence can hallucinate a decision.
+    A hallucinated "cancel" quietly killed orders. A hallucinated "confirm" would be
+    far worse. So the confirmation step asks for NO prompt.
+    """
     segments, _ = _get_model().transcribe(
         wav_path,
         language="en",
-        initial_prompt=_prompt,
+        initial_prompt=_prompt if prompt is None else (prompt or None),
         vad_filter=True,  # drop leading/trailing silence before it reaches the model
         beam_size=5,
     )

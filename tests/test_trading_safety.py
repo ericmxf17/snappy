@@ -224,6 +224,12 @@ def test_a_clear_no_cancels(said):
     "five shares of Apple would cost fifteen hundred",
     "uhh",
     "what's my balance",
+    # Whisper hallucinating its own prompt back on near-silent audio. This is not
+    # hypothetical — the prompt ended "...or say confirm or cancel", and this is
+    # what silently killed orders before the user could click Confirm.
+    "The following is a spoken question about a stock brokerage portfolio",
+    "may ask to buy or sell shares, or say confirm or cancel",
+    "buy or sell shares, or say confirm or cancel.",
 ])
 def test_anything_unclear_leaves_the_order_standing(said):
     """Three outcomes, not two.
