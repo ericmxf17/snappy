@@ -202,6 +202,10 @@ class Snappy(rumps.App):
                 cash=p["cash"],
                 positions=p["positions"],
             )
+            # Prime the transcriber with the tickers you actually hold. Whisper
+            # guesses from context, so knowing you own NVDA is the difference
+            # between hearing "Nvidia" and hearing "and video".
+            transcribe.set_hints([pos["symbol"] for pos in p["positions"]])
         except Exception as e:
             print("portfolio refresh failed:", e)
 

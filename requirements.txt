@@ -1,9 +1,22 @@
 anthropic
 snaptrade-python-sdk
-openai-whisper
+
+# Whisper on the CTranslate2 runtime instead of PyTorch. Same model, same accuracy,
+# ~4x faster on CPU — and it drops a 491 MB dependency. (openai-whisper pulled in
+# torch, numba, llvmlite and sympy: 810 MB of venv for a 74M-parameter model.)
+faster-whisper
+
 sounddevice
 soundfile
 numpy
+
+# macOS UI. rumps only depends on pyobjc-framework-cocoa, so the rest are listed
+# explicitly — WebKit in particular was only ever installed by accident, and a
+# fresh clone would have died on `import WebKit`.
 rumps
-pyobjc-framework-ApplicationServices  # AXIsProcessTrusted — the global hotkey needs Accessibility
+pyobjc-framework-Cocoa
+pyobjc-framework-WebKit
+pyobjc-framework-Quartz
+pyobjc-framework-ApplicationServices  # AXIsProcessTrusted — the ⌥ hotkey needs Accessibility
+
 python-dotenv

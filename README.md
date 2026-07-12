@@ -30,6 +30,10 @@ Speech-to-text runs locally — no audio leaves the machine. Claude decides whic
 endpoint answers the question, searches the web when the answer isn't in your account, and
 writes an answer whose **first paragraph is spoken** while the detail stays on screen.
 
+The transcriber is primed with the tickers you actually hold and the brokerage names SnapTrade
+supports, which is why it hears *NVDA* rather than *and video*, and *buy five shares* rather
+than *by five shares*.
+
 ## Three ways to ask
 
 | | |
@@ -142,5 +146,11 @@ say -o /tmp/t.wav --data-format=LEF32@16000 "what is my account balance"
 - AppKit is main-thread-only. Worker threads never touch the UI — they mutate `state.py` and a
   timer on the main thread pushes it into the panel. Every threading bug in this app came from
   breaking that rule.
-- Whisper's `base` model is the speed/accuracy sweet spot for short commands. `transcribe.py`
-  has the size if you want to trade one for the other.
+- Whisper runs on the **CTranslate2** runtime (`faster-whisper`), not PyTorch. Same model, same
+  accuracy, ~4× faster on CPU, and it keeps 491 MB of torch out of the venv. The `base` model is
+  the sweet spot: on a set of finance phrases it matched `small` exactly while being twice as
+  fast.
+- Apple's `SFSpeechRecognizer` would be lighter still and was tried first. It doesn't work from a
+  plain script: Speech Recognition is TCC-gated, and macOS has no app bundle to attribute the
+  permission to, so the request hangs with no dialog and no error. It becomes available if this
+  is ever packaged as a real `.app` — see `transcribe.py`'s header.
