@@ -454,12 +454,30 @@ class Snappy(rumps.App):
         state.finish_question()
         state.update(status="idle")
 
+    def abort_recording(self):
+        """Close the mic WITHOUT resolving anything.
+
+        The button and the voice path both end in resolve_trade, so a click while
+        the mic is still listening must not also fire the voice path — that would
+        resolve the same order twice, racing a "confirm" against an "I'll wait".
+        """
+        if not self.recording:
+            return
+        self.recording = False
+        self.trigger = None
+        audio.stop_recording()
+        state.update(level=0.0)
+
     def confirm_from_panel(self):
+        print(f"confirm button: pending={trading.pending() is not None}")
+        self.abort_recording()
         threading.Thread(
             target=self.resolve_trade, args=(True, "confirm"), daemon=True
         ).start()
 
     def cancel_from_panel(self):
+        print(f"cancel button: pending={trading.pending() is not None}")
+        self.abort_recording()
         threading.Thread(
             target=self.resolve_trade, args=(False, "cancel"), daemon=True
         ).start()

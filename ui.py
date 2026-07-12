@@ -57,6 +57,10 @@ class _Bridge(NSObject):
     def userContentController_didReceiveScriptMessage_(self, controller, message):
         body = message.body()
         kind = body.get("type")
+        # Logged because "the button did nothing" is otherwise unfalsifiable: it
+        # could be the click, the binding, the bridge, or the handler. This says
+        # which.
+        print(f"panel → {kind}")
 
         if kind == "ask":
             text = (body.get("text") or "").strip()
