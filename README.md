@@ -9,17 +9,17 @@ a laptop speaker is an echo path, and it cost a string of bugs — the worst bei
 confirmation recording Snappy's own voice saying *"say confirm to place the trade"*, deciding
 that wasn't a yes, and talking itself out of its own trade.
 
-> "What's my balance?" → *"You have about a hundred thousand dollars in cash."*
+> *"What's my balance?"* → **You have about $100,000, all in cash.**
 >
-> "How would 5 shares of SpaceX fit into my portfolio?" → *"About two percent. Five SpaceX
-> shares would run you roughly two thousand dollars against your hundred thousand dollar
-> portfolio — and note it's private stock you can't just buy on the open market."*
+> *"How would 5 shares of SpaceX fit into my portfolio?"* → **SpaceX went public this year
+> under SPCX at about $145, so 5 shares would run about $727 — roughly 0.7% of your $100,000
+> portfolio.**
 
-That second one is the point. SpaceX is **private**, so no brokerage quote exists: Snappy has
-to search the web for a secondary-market valuation, then size it against your *real* holdings.
-A portfolio dashboard structurally cannot answer that.
+That second one is the point. Answering it needs the **open web and your real holdings in the
+same breath**: no brokerage endpoint knows what SpaceX is worth, and no search engine knows
+what you own. A portfolio dashboard structurally cannot answer it, and neither can a chatbot.
 
-It can also **trade** — but only paper accounts, and only after you confirm out loud:
+It can also **trade** — but only paper accounts, and only after you confirm:
 
 > *"Buy 5 shares of Apple."* → **5 shares of Apple would cost about $1,576.65 — roughly 1.6%
 > of your $100,000 portfolio. Say "confirm" to proceed.** → say *"confirm"* (or click the
@@ -42,13 +42,14 @@ Python  --executes-->  place_order(trade_id)
 ```
 
 1. **Claude has no tool that can place an order.** Its only trading tool is a proposal. A fully
-   hijacked model can, at worst, *suggest* something — which you then hear read aloud and decline.
+   hijacked model can, at worst, *suggest* something — which you then read on screen and decline.
 2. **The order that fills is the order that was previewed.** `place_order` takes an id SnapTrade
    minted from the preview, not raw parameters, so nothing can swap the symbol or the size between
    the read-back and the fill.
 3. **Confirmation is matched in Python by a regex.** Snappy never asks the model "did they agree?"
-   — that would let it back in through the side door. Anything that isn't a clear yes — silence, a
-   garbled transcript, "actually no" — cancels.
+   — that would let it back in through the side door. A clear yes places the order; a clear no
+   cancels it; and **anything else — silence, a garbled transcript — leaves the order standing**,
+   because a mis-hearing must not be able to destroy a trade you actually wanted.
 
 Every guard fails **closed**:
 
@@ -56,8 +57,8 @@ Every guard fails **closed**:
 |---|---|
 | Paper accounts only | Refuses unless the brokerage is a paper account. Connect a real one and trading disables itself. |
 | Connection must permit trading | `type` must be `trade`, and the connection must be healthy. |
-| Order cap | `$10,000` by default. "Fifty" and "fifteen" sound alike, and this is a voice interface. |
-| Expiry | A proposed order dies after 90 seconds. A half-remembered "confirm" does nothing. |
+| Order cap | `$10,000` by default. "Fifty" and "fifteen" sound alike, and the input is your voice. |
+| Expiry | A proposed order dies after 3 minutes. A half-remembered "confirm" does nothing. |
 | One at a time | A new proposal replaces the old one. No ambiguity about what "confirm" means. |
 | Market orders only | No options, no crypto, no shorting. `place_force_order` (which skips validation) is never called. |
 
@@ -141,8 +142,8 @@ another app is focused is a privileged thing to do. System Settings → Privacy 
 Accessibility → enable Terminal (or whichever app runs Python), **then relaunch Snappy** —
 the permission is cached per process, so a running app won't pick it up.
 
-Not granted? Snappy says so in the panel and carries on: clicking the icon needs no
-permission. Check it in isolation with:
+Not granted? Snappy says so in the panel and carries on — type your question instead, or use
+right-click → Ask Snappy. Check the hotkey in isolation with:
 
 ```sh
 ./venv/bin/python hotkey.py     # prints PRESS/RELEASE, or tells you it's not granted
@@ -158,7 +159,7 @@ permission. Check it in isolation with:
 ## Tests
 
 ```sh
-./venv/bin/python -m pytest tests/ -q     # 40 tests, ~5s
+./venv/bin/python -m pytest tests/ -q     # 91 tests, ~4s
 ```
 
 No network, no microphone, no API keys — they run on a fresh clone with no `.env`. The suite
@@ -170,7 +171,8 @@ targets the places where a bug would be **silent** rather than loud:
 | `test_audio_vad.py` | Silence detection. Wrong one way it cuts you off mid-sentence; wrong the other way the mic hangs open. Only visible in the timing, so it's tested with a fake clock. |
 | `test_regressions.py` | Bugs that actually shipped once: Whisper parroting its own prompt, a tool error killing the answer, the panel stuck on "connecting…". |
 | `test_hotkey_and_threading.py` | Tap-vs-hold on ⌥, and the workers-mutate/timer-reads contract that every threading bug here came from breaking. |
-| `test_assistant.py` | The spoken/written split. If it breaks, Snappy reads markdown asterisks aloud. |
+| `test_assistant.py` | The headline/detail split that keeps an answer readable at a glance. |
+| `test_trading_safety.py` | The guards on the only path that can move money — and that Claude still has no tool to execute a trade. |
 
 ## Testing pieces in isolation
 
