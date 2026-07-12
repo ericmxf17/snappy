@@ -108,15 +108,26 @@ def test_anything_unclear_is_a_no(said):
     assert not trading.is_confirmation(said)
 
 
-def test_silence_cancels(monkeypatch):
-    placed = wire(monkeypatch, [PAPER])
+def test_silence_never_places_an_order(monkeypatch):
+    """Silence is not consent."""
+    wire(monkeypatch, [PAPER])
+    trading.propose("BUY", "AAPL", 5)
+    assert not trading.is_confirmation("")
+
+
+def test_silence_does_not_destroy_the_order_either(monkeypatch):
+    """...but silence is not a cancellation.
+
+    Treating it as one destroyed the pending order while the user was still
+    reading the Confirm button — so the button was already dead by the time they
+    reached it. Hearing nothing means "still waiting", and the order must survive
+    for the button (or a second attempt) to act on.
+    """
+    wire(monkeypatch, [PAPER])
     trading.propose("BUY", "AAPL", 5)
 
-    assert not trading.is_confirmation("")     # heard nothing
-    trading.cancel()
-
-    assert trading.pending() is None
-    assert placed == []
+    # This is what the app does on a silent confirmation window: nothing at all.
+    assert trading.pending() is not None, "the order must still be there to click"
 
 
 # --- guards, all failing closed -------------------------------------------

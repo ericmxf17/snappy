@@ -35,6 +35,7 @@ ALLOW_LIVE_TRADING = os.environ.get("SNAPPY_ALLOW_LIVE_TRADING", "").lower() == 
 # worst mis-hearing into a refusal instead of a position.
 MAX_ORDER_USD = float(os.environ.get("SNAPPY_MAX_ORDER_USD", 10_000))
 
-# A proposed order goes stale. Confirming one you half-remember from two minutes ago
-# should do nothing at all.
-ORDER_TTL_SECONDS = 90
+# A proposed order goes stale. Confirming one you half-remember from five minutes ago
+# should do nothing at all. Long enough to read the card and reach for the button;
+# short enough that the price you were quoted is still roughly the price you get.
+ORDER_TTL_SECONDS = 180

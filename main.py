@@ -381,11 +381,19 @@ class Snappy(rumps.App):
 
     def resolve_trade(self, confirmed, heard=""):
         """Place the pending order, or don't. Called from a worker or the bridge."""
+        if not confirmed and not heard.strip():
+            # Heard nothing at all. Silence is not consent — but it isn't a
+            # cancellation either, and treating it as one destroyed the order while
+            # the user was still reading the Confirm button. Stop listening, leave
+            # the order standing, and let them click or ask again.
+            state.update(status="confirming")
+            say_now("I'll wait. Say confirm, or use the button.")
+            return
+
         if not confirmed:
             trading.cancel()
             state.update(pending=None, status="answered")
-            say_now("Cancelled. I didn't place anything." if heard
-                    else "I didn't catch a yes, so I didn't place anything.")
+            say_now("Cancelled. I didn't place anything.")
         else:
             try:
                 filled = trading.confirm()
