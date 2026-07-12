@@ -104,6 +104,52 @@ TOOLS = [
 
 TOOLS.append(
     {
+        "name": "get_orders",
+        "description": (
+            "Orders and whether they've actually filled. Use for 'did my order go "
+            "through', 'what orders are pending', 'did I get filled', 'what have I "
+            "traded'. IMPORTANT: an order can be PENDING for a long time — a market "
+            "order placed while the exchange is closed sits unfilled until the next "
+            "open, and a PENDING order has NOT bought anything yet. Never describe a "
+            "pending order as a completed purchase."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "open_only": {
+                    "type": "boolean",
+                    "description": "Only orders still waiting to fill. Default false.",
+                }
+            },
+            "required": [],
+        },
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "preview_cancel",
+        "description": (
+            "PROPOSE cancelling an open order. This does NOT cancel it — the user must "
+            "confirm. Use for 'cancel my order', 'call back that Apple buy', 'cancel "
+            "everything pending'. Call get_orders first to find the order_id. To cancel "
+            "several, propose them one at a time — each needs its own confirmation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": "The order_id from get_orders.",
+                }
+            },
+            "required": ["order_id"],
+        },
+    }
+)
+
+TOOLS.append(
+    {
         "name": "preview_trade",
         "description": (
             "PROPOSE a trade and get its cost and impact. This does NOT place the "
@@ -148,6 +194,14 @@ def _preview_trade(action, symbol, units):
         return f"Refused: {e}"
 
 
+def _preview_cancel(order_id):
+    """Propose cancelling an order. Cancels nothing — the user still has to confirm."""
+    try:
+        return trading.propose_cancel(order_id)
+    except trading.TradeRefused as e:
+        return f"Refused: {e}"
+
+
 DISPATCH = {
     "get_portfolio_summary": st.get_portfolio_summary,
     "get_account_balance": st.get_account_balance,
@@ -155,10 +209,12 @@ DISPATCH = {
     "get_quote": st.get_quote,
     "list_connections": st.list_connections,
     "list_supported_brokerages": st.list_supported_brokerages,
-    # NOTE: there is deliberately NO "place_trade" here. Execution lives in
-    # trading.confirm(), called by main.py after the user confirms — never by the
-    # model. See trading.py's header for why.
+    "get_orders": st.get_orders,
+    # NOTE: there is deliberately NO "place_trade" and no "cancel_order" here.
+    # Execution and cancellation live in trading.py, called by main.py after the
+    # user confirms — never by the model. See trading.py's header for why.
     "preview_trade": _preview_trade,
+    "preview_cancel": _preview_cancel,
 }
 
 

@@ -72,7 +72,22 @@ def describe_fill(filled):
     never be able to impersonate a failed trade, so every field here is optional.
     """
     try:
-        verb = "Bought" if filled.get("action") == "BUY" else "Sold"
+        if filled.get("kind") == "cancel":
+            units = filled.get("units")
+            size = f"{units:g} " if isinstance(units, (int, float)) else ""
+            return (
+                f"Cancelled the {(filled.get('action') or '').lower()} order for "
+                f"{size}{filled.get('symbol') or 'that symbol'}."
+            )
+
+        status = (filled.get("status") or "").upper()
+        settled = status in ("EXECUTED", "FILLED", "COMPLETE", "COMPLETED")
+
+        # "Bought" is a claim about what you now own. A market order placed while the
+        # exchange is closed sits PENDING until the next open and has bought nothing —
+        # so an unfilled order is described as SUBMITTED, not as a purchase.
+        action = "Bought" if filled.get("action") == "BUY" else "Sold"
+        verb = action if settled else f"Submitted: {'buy' if filled.get('action') == 'BUY' else 'sell'}"
         parts = [verb]
 
         units = filled.get("units")
@@ -86,10 +101,14 @@ def describe_fill(filled):
             parts.append(f"for about ${filled['estimated_cost']:,.2f}")
 
         line = " ".join(parts) + "."
-        status = filled.get("status")
-        return f"{line} Order {status}." if status else line
+        if settled:
+            return line
+        return (
+            f"{line} Still {status.lower() or 'pending'} — it hasn't filled yet. "
+            "Market orders placed while the exchange is closed fill at the next open."
+        )
     except Exception:  # belt and braces: a wording bug is not a trading failure
-        return "Order placed. Check your brokerage for the fill."
+        return "Order submitted. Check your brokerage for the fill."
 
 
 class _StatusTarget(NSObject):

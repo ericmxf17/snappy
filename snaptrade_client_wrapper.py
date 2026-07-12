@@ -237,6 +237,58 @@ def place_previewed_trade(trade_id):
     return {k: v for k, v in fill.items() if v is not None}
 
 
+def _num(v):
+    """SnapTrade sends quantities as decimal strings ("5.000000000000000000")."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_orders(open_only=False, account_id=None):
+    """Orders and their fill status.
+
+    Without this, Snappy could place an order and then have no idea what became of
+    it — and a market order placed outside trading hours sits PENDING until the next
+    open, so "did it fill?" is the very next question a user asks.
+    """
+    account_id = account_id or _default_account_id()
+    orders = _client.account_information.get_user_account_orders(
+        account_id=account_id, **_USER
+    ).body
+
+    out = []
+    for o in orders:
+        o = dict(o)
+        status = o.get("status")
+        if open_only and status not in ("PENDING", "OPEN", "ACCEPTED", "PARTIAL"):
+            continue
+        out.append(
+            {
+                "order_id": o.get("brokerage_order_id"),
+                "symbol": (o.get("universal_symbol") or {}).get("symbol"),
+                "action": o.get("action"),
+                "status": status,
+                "units": _num(o.get("total_quantity")),
+                "filled_units": _num(o.get("filled_quantity")),
+                "order_type": o.get("order_type"),
+                "execution_price": _num(o.get("execution_price")),
+                "placed_at": o.get("time_placed"),
+                "executed_at": o.get("time_executed"),
+            }
+        )
+    return out
+
+
+def cancel_order(order_id, account_id=None):
+    """Cancel a still-open order. A mutation — gated behind confirmation in trading.py."""
+    account_id = account_id or _default_account_id()
+    result = _client.trading.cancel_order(
+        account_id=account_id, brokerage_order_id=order_id, **_USER
+    ).body
+    return {"order_id": order_id, "status": dict(result).get("status")}
+
+
 def list_connections():
     """The user's brokerage connections and their health."""
     conns = _client.connections.list_brokerage_authorizations(**_USER).body

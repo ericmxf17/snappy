@@ -98,6 +98,33 @@ def check_allowed():
     return account["brokerage"]
 
 
+def propose_cancel(order_id):
+    """Propose CANCELLING an open order. Cancels nothing.
+
+    Same gate as placing: cancelling is a mutation, so the model may only propose it
+    and the user must confirm. (Pulling an order the user wanted is just as
+    destructive as placing one they didn't.)
+    """
+    global _pending
+
+    check_allowed()
+
+    order = next((o for o in st.get_orders(open_only=True) if o["order_id"] == order_id), None)
+    if order is None:
+        raise TradeRefused("I can't find an open order with that id. It may already be filled.")
+
+    _pending = {
+        "kind": "cancel",
+        "order_id": order_id,
+        "symbol": order["symbol"],
+        "action": order["action"],
+        "units": order["units"],
+        "estimated_cost": 0,
+        "proposed_at": time.monotonic(),
+    }
+    return dict(_pending)
+
+
 def propose(action, symbol, units):
     """Run the guards and ask the brokerage what this order would do. Places nothing."""
     global _pending
@@ -124,7 +151,7 @@ def propose(action, symbol, units):
     if not preview["trade_id"]:
         raise TradeRefused("The brokerage wouldn't validate that order.")
 
-    _pending = {**preview, "proposed_at": time.monotonic()}
+    _pending = {**preview, "kind": "trade", "proposed_at": time.monotonic()}
     return dict(_pending)
 
 
@@ -172,5 +199,10 @@ def confirm():
         raise TradeRefused("That order expired. Ask me again and I'll re-price it.")
 
     _pending = None            # burn it first: a retry must never double-fill
+
+    if order.get("kind") == "cancel":
+        result = st.cancel_order(order["order_id"])
+        return {**order, **result}
+
     result = st.place_previewed_trade(order["trade_id"])
     return {**order, **result}
