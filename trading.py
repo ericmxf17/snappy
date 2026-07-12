@@ -45,6 +45,15 @@ _YES = re.compile(
     re.IGNORECASE,
 )
 
+# What counts as "no". Anything that is neither a yes nor a no means "I didn't
+# understand" — and that leaves the order standing rather than destroying it. A
+# mis-transcription (or Snappy hearing its own voice through the speakers) must not
+# be able to cancel a trade the user actually wanted.
+_NO = re.compile(
+    r"\b(no|nope|nah|cancel|stop|forget it|never ?mind|don'?t|do not)\b",
+    re.IGNORECASE,
+)
+
 _pending = None  # at most one proposed order, ever
 
 
@@ -121,8 +130,13 @@ def pending():
 
 
 def is_confirmation(text):
-    """Did the user say yes? Anything unclear is a no."""
+    """Did the user say yes? Only an unambiguous yes counts."""
     return bool(_YES.match((text or "").strip()))
+
+
+def is_cancellation(text):
+    """Did the user say no? Anything that is neither yes nor no means 'unclear'."""
+    return bool(_NO.search(text or ""))
 
 
 def cancel():

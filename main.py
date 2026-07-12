@@ -43,8 +43,14 @@ ACCESSIBILITY_PANE = (
 # "that order expired".
 AUTOSTOP_TRIGGERS = ("click", "confirm")
 
+# Ticks (of the 0.15s timer) to let the speakers fall quiet after Snappy stops
+# talking, before opening the mic. The `say` process exits slightly before its
+# audio has finished leaving the speakers.
+SETTLE_TICKS = 3
+
 
 _speaking = None  # the `say` process currently talking, if any
+_speech_lock = threading.Lock()
 
 
 def say_now(text):
@@ -57,13 +63,30 @@ def say_soon(text):
     _say(text)
 
 
+def is_speaking():
+    """Is Snappy talking right now?
+
+    The mic must never open while it is. Without this check, the confirmation
+    recording captured Snappy's OWN voice reading the order back — it transcribed
+    "say confirm to place the trade", correctly decided that wasn't a yes, and
+    talked itself out of its own trade.
+    """
+    return _speaking is not None and _speaking.poll() is None
+
+
 def _say(text):
-    """Never talk over ourselves: the filler line has to finish before the answer."""
+    """Never talk over ourselves.
+
+    The lock is load-bearing: several threads speak (the narration during a search,
+    the answer, a trade result). Without it two of them pass the "am I already
+    talking?" check at the same moment and you hear both at once.
+    """
     global _speaking
-    if _speaking and _speaking.poll() is None:
-        _speaking.wait()
-    _speaking = subprocess.Popen(["say", text])
-    return _speaking
+    with _speech_lock:
+        if _speaking is not None and _speaking.poll() is None:
+            _speaking.wait()
+        _speaking = subprocess.Popen(["say", text])
+        return _speaking
 
 
 class _StatusTarget(NSObject):
@@ -103,6 +126,7 @@ class Snappy(rumps.App):
         self.icon_state = None
         self.target = None  # strong ref: PyObjC won't retain the click target
         self.want_confirm = False  # a worker asks the main thread to reopen the mic
+        self.settle = SETTLE_TICKS  # let the speakers go quiet before the mic opens
 
         self.menu = ["Ask Snappy", "Show panel", None]
 
@@ -167,9 +191,19 @@ class Snappy(rumps.App):
 
         # A worker proposed a trade and wants the mic reopened to hear a yes. Only
         # the main thread may do that — starting a recording shows the panel.
+        #
+        # Wait until Snappy has actually stopped talking, then give the speakers a
+        # moment to fall quiet. Opening the mic mid-sentence means it records its own
+        # read-back, transcribes "say confirm to place the trade", and decides that
+        # isn't a yes — Snappy talking itself out of its own trade.
         if self.want_confirm and not self.recording:
-            self.want_confirm = False
-            self.start("confirm")
+            if is_speaking():
+                self.settle = SETTLE_TICKS
+            elif self.settle > 0:
+                self.settle -= 1
+            else:
+                self.want_confirm = False
+                self.start("confirm")
 
         # Don't touch the dirty flag until the page can actually receive the
         # update — building the snapshot clears it, and a push into a half-loaded
@@ -380,12 +414,14 @@ class Snappy(rumps.App):
         self.resolve_trade(trading.is_confirmation(said), said)
 
     def resolve_trade(self, confirmed, heard=""):
-        """Place the pending order, or don't. Called from a worker or the bridge."""
-        if not confirmed and not heard.strip():
-            # Heard nothing at all. Silence is not consent — but it isn't a
-            # cancellation either, and treating it as one destroyed the order while
-            # the user was still reading the Confirm button. Stop listening, leave
-            # the order standing, and let them click or ask again.
+        """Place the pending order, or don't. Called from a worker or the bridge.
+
+        Three outcomes, not two. A clear yes places it; a clear no cancels it; and
+        ANYTHING ELSE — silence, a garbled transcript, Snappy hearing its own voice
+        — leaves the order standing. Treating "unclear" as "cancel" destroyed trades
+        the user actually wanted, including while they reached for the Confirm button.
+        """
+        if not confirmed and not trading.is_cancellation(heard):
             state.update(status="confirming")
             say_now("I'll wait. Say confirm, or use the button.")
             return

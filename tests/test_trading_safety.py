@@ -212,6 +212,40 @@ def test_confirm_with_nothing_pending_places_nothing(monkeypatch):
     assert placed == []
 
 
+@pytest.mark.parametrize("said", ["no", "cancel", "nope", "actually no", "stop", "never mind"])
+def test_a_clear_no_cancels(said):
+    assert trading.is_cancellation(said)
+    assert not trading.is_confirmation(said)
+
+
+@pytest.mark.parametrize("said", [
+    "",                                              # silence
+    "Say confirm to place the trade.",               # Snappy hearing ITSELF
+    "five shares of Apple would cost fifteen hundred",
+    "uhh",
+    "what's my balance",
+])
+def test_anything_unclear_leaves_the_order_standing(said):
+    """Three outcomes, not two.
+
+    Treating "unclear" as "cancel" destroyed trades the user actually wanted. The
+    worst case was Snappy recording its own read-back through the speakers,
+    transcribing "say confirm to place the trade", and talking itself out of its
+    own trade.
+    """
+    assert not trading.is_confirmation(said)     # never places
+    assert not trading.is_cancellation(said)     # ...but never destroys it either
+
+
+def test_the_speech_lock_serialises_talking():
+    """Several threads speak (narration, the answer, a trade result). Without a
+    lock, two pass the "am I already talking?" check together and you hear both
+    at once — which is also how the mic ends up open while Snappy is speaking."""
+    import main
+    assert main._speech_lock is not None
+    assert hasattr(main, "is_speaking")
+
+
 def test_the_confirmation_mic_stops_on_silence():
     """The confirmation recording must auto-stop when you stop talking.
 
