@@ -201,6 +201,26 @@ def test_confirm_with_nothing_pending_places_nothing(monkeypatch):
     assert placed == []
 
 
+def test_the_confirmation_mic_stops_on_silence():
+    """The confirmation recording must auto-stop when you stop talking.
+
+    It didn't. Only "click" recordings auto-stopped, so the mic opened to hear
+    "confirm" and then never closed — the order aged out underneath it and the
+    user got a baffling "that order expired".
+    """
+    import main
+    assert "confirm" in main.AUTOSTOP_TRIGGERS
+    assert "click" in main.AUTOSTOP_TRIGGERS
+    assert "hold" not in main.AUTOSTOP_TRIGGERS, "a held key sends on release"
+
+
+def test_expired_and_nothing_pending_are_different_messages(monkeypatch):
+    """Saying "expired" when no order exists hid the bug above."""
+    wire(monkeypatch, [PAPER])
+    with pytest.raises(trading.TradeRefused, match="don't have an order"):
+        trading.confirm()
+
+
 def test_a_new_proposal_replaces_the_old_one(monkeypatch):
     """'Buy 5 Apple'... 'actually, buy 3 Nvidia'... 'confirm' must fill the SECOND."""
     placed = wire(monkeypatch, [PAPER], trade_id="trade-A")

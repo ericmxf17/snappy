@@ -37,6 +37,12 @@ ACCESSIBILITY_PANE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 )
 
+# Recordings that end when you stop talking. A held ⌥ is the exception — that one
+# sends on release. "confirm" MUST be in here: it was left out once, and that mic
+# then never closed at all, so every proposed order aged out under a misleading
+# "that order expired".
+AUTOSTOP_TRIGGERS = ("click", "confirm")
+
 
 _speaking = None  # the `say` process currently talking, if any
 
@@ -175,8 +181,11 @@ class Snappy(rumps.App):
         if not self.recording:
             return
         ui.set_level(state.STATE["level"])
-        # A held key sends on release; a click-started recording ends when you do.
-        if self.trigger == "click" and audio.should_autostop():
+        # A held key sends on release. Every other recording — including the one
+        # that listens for "confirm" — ends when you stop talking. Leaving "confirm"
+        # out of this meant that mic never closed at all: it stayed open until the
+        # order's 90s TTL quietly expired underneath it.
+        if self.trigger in AUTOSTOP_TRIGGERS and audio.should_autostop():
             self.stop()
 
     def view(self):

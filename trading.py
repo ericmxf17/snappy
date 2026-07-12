@@ -138,6 +138,12 @@ def confirm():
     """
     global _pending
 
+    # "Expired" and "there was never an order" are different failures, and saying
+    # "expired" for both hid a real bug: the confirmation mic wasn't auto-stopping,
+    # so every order aged out and the message made it look like a TTL problem.
+    if _pending is None:
+        raise TradeRefused("I don't have an order waiting. Ask me to buy something first.")
+
     order = pending()          # re-checks expiry
     if order is None:
         _pending = None
