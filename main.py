@@ -72,6 +72,16 @@ def describe_fill(filled):
     never be able to impersonate a failed trade, so every field here is optional.
     """
     try:
+        if filled.get("kind") == "cancel_all":
+            done, failed = filled.get("cancelled", []), filled.get("failed", [])
+            line = f"Cancelled {len(done)} order{'' if len(done) == 1 else 's'}."
+            if failed:
+                line += (
+                    f" {len(failed)} couldn't be cancelled — they may have already "
+                    "filled. Check your brokerage."
+                )
+            return line
+
         if filled.get("kind") == "cancel":
             units = filled.get("units")
             size = f"{units:g} " if isinstance(units, (int, float)) else ""

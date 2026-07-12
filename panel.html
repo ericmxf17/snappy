@@ -176,6 +176,16 @@
   .trade .no { background: rgba(255,255,255,.10); color: var(--text); }
   .trade .say { text-align: center; font-size: 11px; color: var(--faint); margin-top: 8px; }
 
+  /* One confirmation for a whole batch widens the blast radius, so the batch has
+     to be visible. A list you can't see is a list you can't refuse. */
+  .batch { margin-top: 9px; max-height: 150px; overflow-y: auto;
+           border-top: 1px solid rgba(224,163,64,.25); padding-top: 7px; }
+  .batch::-webkit-scrollbar { width: 0; }
+  .brow { display: flex; gap: 8px; align-items: baseline; padding: 2px 0;
+          font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--dim); }
+  .brow .bsym { color: var(--text); font-weight: 600; }
+  .brow .bst { margin-left: auto; color: var(--faint); font-size: 10px; }
+
   /* ---- composer -------------------------------------------------------- */
   #composer { flex: none; display: flex; align-items: center; gap: 8px;
               background: rgba(255,255,255,.05); border: 1px solid var(--line);
@@ -309,7 +319,28 @@
 
   // The confirmation card. Nothing here can place an order — the buttons only
   // post a message; Python decides. See trading.py.
+  const batchHTML = (t) => `
+    <div class="trade">
+      <div class="top">
+        <span class="act">CANCEL ${t.orders.length} ORDER${t.orders.length === 1 ? '' : 'S'}</span>
+        <span class="qty">${t.symbol ? esc(t.symbol) : 'all symbols'}</span>
+      </div>
+      <div class="batch">
+        ${t.orders.map(o => `<div class="brow">
+          <span>${esc(o.action)} ${o.units}</span>
+          <span class="bsym">${esc(o.symbol)}</span>
+          <span class="bst">${esc(o.status)}</span>
+        </div>`).join('')}
+      </div>
+      <div class="row2">
+        <button class="go" id="btnGo">Confirm</button>
+        <button class="no" id="btnNo">Dismiss</button>
+      </div>
+      <div class="say">or just say “confirm”</div>
+    </div>`;
+
   const tradeHTML = (t, total) => {
+    if (t.kind === 'cancel_all') return batchHTML(t);
     const killing = t.kind === 'cancel';
     const pct = (!killing && total) ? (100 * t.estimated_cost / total) : null;
     return `<div class="trade">

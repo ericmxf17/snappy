@@ -58,13 +58,30 @@ Every guard fails **closed**:
 | Paper accounts only | Refuses unless the brokerage is a paper account. Connect a real one and trading disables itself. |
 | Connection must permit trading | `type` must be `trade`, and the connection must be healthy. |
 | Order cap | `$10,000` by default. "Fifty" and "fifteen" sound alike, and the input is your voice. |
+| Must be priceable | An unpriced symbol is refused outright. `estimated_cost` is `units × price`, so a null price computes to `$0` — and `$0` is not over the cap. The one guard built to catch a misheard size would have **failed open** exactly when nobody could price the trade. |
 | Expiry | A proposed order dies after 3 minutes. A half-remembered "confirm" does nothing. |
 | One at a time | A new proposal replaces the old one. No ambiguity about what "confirm" means. |
 | Market orders only | No options, no crypto, no shorting. `place_force_order` (which skips validation) is never called. |
+| Cancelling is gated too | Pulling an order you wanted is as destructive as placing one you didn't, so `preview_cancel` proposes and you confirm. A batch cancel **lists every order** before you agree to it. |
 
 The read-back always leads with the **dollar cost and portfolio percentage**, not the share count —
 because "buy fifty" misheard as "buy fifteen" reads fine, but *"$7,000 — 7% of your portfolio"* is
 obviously wrong at a glance.
+
+### And it never claims more than it knows
+
+Three separate bugs here all had the same shape: Snappy stating something about real money more
+confidently than it had any right to.
+
+- It reported **"the order didn't go through, nothing was placed"** about an order that *had*
+  filled — a `TypeError` while formatting the success message got caught by the failure handler.
+  Now the formatter cannot raise, and a failure *after* the order is sent says **"it may have gone
+  through — check your brokerage"**, because that is the truth.
+- It said **"Bought 5 shares"** about an order that had filled **zero** shares. A market order
+  placed while the exchange is closed sits `PENDING` until the next open. Placed is not filled.
+- An **unpriced holding** was counted as `$0`, which shrinks the portfolio total — and the total is
+  the denominator behind every percentage it quotes. It now says so instead of quietly inflating
+  every weight.
 
 See [trading.py](trading.py) — it's the only file that can move money, and it's deliberately short
 enough to read in one sitting.
@@ -159,7 +176,7 @@ right-click → Ask Snappy. Check the hotkey in isolation with:
 ## Tests
 
 ```sh
-./venv/bin/python -m pytest tests/ -q     # 91 tests, ~4s
+./venv/bin/python -m pytest tests/ -q     # 98 tests, ~4s
 ```
 
 No network, no microphone, no API keys — they run on a fresh clone with no `.env`. The suite

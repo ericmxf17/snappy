@@ -130,7 +130,15 @@ def get_portfolio_summary(account_id=None):
 
     positions = []
     holdings_value = 0.0
+    unpriced = []
     for p in get_positions(account_id):
+        # A halted or illiquid symbol comes back with no price. Counting it as $0
+        # quietly shrinks the total, which INFLATES every other weight — and the
+        # total is the denominator behind "how would X fit into my portfolio". A
+        # wrong number said confidently is worse than an admitted gap, so the gap
+        # is reported rather than buried.
+        if not p["price"]:
+            unpriced.append(p["symbol"])
         value = (p["units"] or 0) * (p["price"] or 0)
         holdings_value += value
         positions.append({**p, "market_value": round(value, 2)})
@@ -141,7 +149,7 @@ def get_portfolio_summary(account_id=None):
 
     positions.sort(key=lambda p: p["market_value"], reverse=True)
 
-    return {
+    summary = {
         "total_portfolio_value": round(total, 2),
         "cash": round(cash, 2),
         "cash_pct": round(100 * cash / total, 2) if total else 0.0,
@@ -149,6 +157,14 @@ def get_portfolio_summary(account_id=None):
         "buying_power": usd.get("buying_power"),
         "positions": positions,
     }
+    if unpriced:
+        summary["warning"] = (
+            f"No live price for {', '.join(unpriced)}, so they are counted as $0. "
+            f"The total and every percentage below are therefore UNDERSTATED and "
+            f"OVERSTATED respectively. Say so rather than quoting the percentages "
+            f"as if they were exact."
+        )
+    return summary
 
 
 def resolve_symbol(symbol, account_id=None):

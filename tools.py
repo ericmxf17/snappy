@@ -150,6 +150,29 @@ TOOLS.append(
 
 TOOLS.append(
     {
+        "name": "preview_cancel_all",
+        "description": (
+            "PROPOSE cancelling EVERY open order at once, or every open order for one "
+            "symbol. Cancels nothing — the user must confirm. Use for 'cancel all my "
+            "orders', 'cancel everything pending', 'cancel all my Apple orders'. When "
+            "you read this back, LIST what would be cancelled — one confirmation for a "
+            "whole batch means they have to be able to see what they're agreeing to."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Optional: only cancel open orders for this ticker.",
+                }
+            },
+            "required": [],
+        },
+    }
+)
+
+TOOLS.append(
+    {
         "name": "preview_trade",
         "description": (
             "PROPOSE a trade and get its cost and impact. This does NOT place the "
@@ -202,6 +225,14 @@ def _preview_cancel(order_id):
         return f"Refused: {e}"
 
 
+def _preview_cancel_all(symbol=None):
+    """Propose cancelling a whole batch. Cancels nothing."""
+    try:
+        return trading.propose_cancel_all(symbol)
+    except trading.TradeRefused as e:
+        return f"Refused: {e}"
+
+
 DISPATCH = {
     "get_portfolio_summary": st.get_portfolio_summary,
     "get_account_balance": st.get_account_balance,
@@ -215,6 +246,7 @@ DISPATCH = {
     # user confirms — never by the model. See trading.py's header for why.
     "preview_trade": _preview_trade,
     "preview_cancel": _preview_cancel,
+    "preview_cancel_all": _preview_cancel_all,
 }
 
 

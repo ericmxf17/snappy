@@ -66,7 +66,22 @@ _pending = None  # at most one proposed order, ever
 
 
 class TradeRefused(RuntimeError):
-    """A guard said no. The message is written to be spoken aloud."""
+    """A guard — or the brokerage — said no. The message is written to be read."""
+
+
+def _brokerage_reason(error):
+    """Pull the human reason out of an SDK exception.
+
+    The SDK raises ApiException, whose str() is the status line, every response
+    header, and then the body. The user wants "not enough cash", not a HTTPHeaderDict.
+    """
+    text = str(error)
+    match = re.search(r"['\"]detail['\"]\s*:\s*['\"]([^'\"]+)['\"]", text)
+    if match:
+        return f"The brokerage wouldn't accept that order: {match.group(1).lower()}."
+    if "429" in text or "RateLimit" in text:
+        return "The brokerage is rate-limiting me. Try again in a moment."
+    return "The brokerage wouldn't accept that order."
 
 
 def _paper_account():
@@ -85,9 +100,24 @@ def _paper_account():
 
 
 def check_allowed():
-    """Can Snappy trade at all right now? Raises TradeRefused with a spoken reason."""
+    """Can Snappy trade at all right now? Raises TradeRefused with a speakable reason."""
     if config.ALLOW_LIVE_TRADING:
-        return "live trading explicitly enabled"
+        # Even with the escape hatch on, the connection must still be healthy and
+        # trade-enabled. This used to return early and skip both checks, which meant
+        # the ONE setting a user might flip also quietly disabled the other guards.
+        live = next(
+            (
+                c
+                for c in st.list_connections()
+                if not c.get("disabled") and (c.get("type") or "").lower() == "trade"
+            ),
+            None,
+        )
+        if live is None:
+            raise TradeRefused(
+                "No healthy trade-enabled brokerage connection, so I can't place orders."
+            )
+        return live["brokerage"]
 
     account = _paper_account()
     if account is None:
@@ -125,6 +155,38 @@ def propose_cancel(order_id):
     return dict(_pending)
 
 
+def propose_cancel_all(symbol=None):
+    """Propose cancelling every open order (optionally just one symbol). Cancels nothing.
+
+    One confirmation for the whole batch. That is a deliberate widening of blast
+    radius, so the read-back has to LIST what will be pulled — a batch you can't see
+    is a batch you can't refuse.
+    """
+    global _pending
+
+    check_allowed()
+
+    orders = st.get_orders(open_only=True)
+    if symbol:
+        want = symbol.strip().upper()
+        orders = [o for o in orders if (o["symbol"] or "").upper() == want]
+
+    if not orders:
+        raise TradeRefused(
+            f"You have no open {symbol.upper() + ' ' if symbol else ''}orders to cancel."
+        )
+
+    _pending = {
+        "kind": "cancel_all",
+        "orders": orders,
+        "symbol": symbol.upper() if symbol else None,
+        "units": sum(o["units"] or 0 for o in orders),
+        "estimated_cost": 0,
+        "proposed_at": time.monotonic(),
+    }
+    return dict(_pending)
+
+
 def propose(action, symbol, units):
     """Run the guards and ask the brokerage what this order would do. Places nothing."""
     global _pending
@@ -139,9 +201,31 @@ def propose(action, symbol, units):
     if units <= 0:
         raise TradeRefused("That's not a number of shares I can trade.")
 
-    preview = st.preview_trade(action, symbol, units)
+    try:
+        preview = st.preview_trade(action, symbol, units)
+    except TradeRefused:
+        raise
+    except Exception as e:
+        # The brokerage said no ("Not enough cash to place trades", "Market closed",
+        # an unknown symbol). That's a refusal, not a crash — but the SDK raises it
+        # as an ApiException whose str() is a wall of HTTP headers. Pull out the
+        # reason so the user hears the reason.
+        raise TradeRefused(_brokerage_reason(e)) from e
 
-    cost = preview["estimated_cost"] or 0
+    # An unpriced symbol makes the cap MEANINGLESS, and it used to fail open:
+    # estimated_cost is units x price, so a null price computed a cost of $0, and
+    # $0 is not over the limit. The one guard built to catch "buy fifty" misheard as
+    # "buy fifteen" would wave the order straight through at an unknown size.
+    #
+    # If we cannot price it, we cannot size it, so we do not place it.
+    price = preview.get("price")
+    if not isinstance(price, (int, float)) or price <= 0:
+        raise TradeRefused(
+            f"I can't get a live price for {preview.get('symbol') or symbol.upper()}, "
+            "so I can't tell you what this would cost. I won't place an order I can't size."
+        )
+
+    cost = preview["estimated_cost"]
     if cost > config.MAX_ORDER_USD:
         raise TradeRefused(
             f"That's about {cost:,.0f} dollars, over my {config.MAX_ORDER_USD:,.0f} "
@@ -200,9 +284,24 @@ def confirm():
 
     _pending = None            # burn it first: a retry must never double-fill
 
-    if order.get("kind") == "cancel":
+    kind = order.get("kind")
+
+    if kind == "cancel":
         result = st.cancel_order(order["order_id"])
         return {**order, **result}
+
+    if kind == "cancel_all":
+        # An order can fill in the gap between proposing and confirming, and a
+        # cancel that arrives too late fails. That is not a reason to abandon the
+        # rest of the batch — report what happened per order.
+        cancelled, failed = [], []
+        for o in order["orders"]:
+            try:
+                st.cancel_order(o["order_id"])
+                cancelled.append(o)
+            except Exception as e:  # already filled, already cancelled, network
+                failed.append({**o, "error": str(e)})
+        return {**order, "cancelled": cancelled, "failed": failed}
 
     result = st.place_previewed_trade(order["trade_id"])
     return {**order, **result}

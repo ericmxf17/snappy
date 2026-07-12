@@ -243,6 +243,100 @@ def test_anything_unclear_leaves_the_order_standing(said):
     assert not trading.is_cancellation(said)     # ...but never destroys it either
 
 
+def test_an_unpriced_symbol_is_refused_not_waved_through(monkeypatch):
+    """The order cap used to FAIL OPEN on a symbol with no price.
+
+    estimated_cost is units x price, so a null price computed a cost of $0 — and $0
+    is not over the $10,000 limit. The one guard built to catch "buy fifty" misheard
+    as "buy fifteen" would wave the order through at an unknown size, on a symbol
+    nobody could price. If we can't size it, we don't place it.
+    """
+    wire(monkeypatch, [PAPER])
+    monkeypatch.setattr(st, "preview_trade", lambda action, symbol, units, account_id=None: {
+        "trade_id": "t1", "action": action, "symbol": symbol.upper(), "description": "",
+        "units": float(units), "price": None, "estimated_cost": 0,
+        "estimated_commission": 0, "remaining_cash": 0})
+
+    with pytest.raises(trading.TradeRefused, match="can't get a live price"):
+        trading.propose("BUY", "HALTED", 1000)
+
+    assert trading.pending() is None
+
+
+def test_the_live_trading_escape_hatch_still_checks_the_connection(monkeypatch):
+    """Flipping ALLOW_LIVE_TRADING used to skip the healthy/trade-enabled checks too —
+    so the one setting a user might turn on quietly disabled the OTHER guards."""
+    monkeypatch.setattr(config, "ALLOW_LIVE_TRADING", True)
+    monkeypatch.setattr(st, "list_connections", lambda: [READONLY])  # not trade-enabled
+
+    with pytest.raises(trading.TradeRefused, match="trade-enabled"):
+        trading.check_allowed()
+
+
+# --- batch cancel ----------------------------------------------------------
+
+def test_cancel_all_proposes_but_cancels_nothing(monkeypatch):
+    wire(monkeypatch, [PAPER])
+    open_orders = [
+        {"order_id": "o1", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
+        {"order_id": "o2", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
+    ]
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False: open_orders)
+    killed = []
+    monkeypatch.setattr(st, "cancel_order", lambda oid: killed.append(oid))
+
+    proposal = trading.propose_cancel_all()
+
+    assert proposal["kind"] == "cancel_all"
+    assert len(proposal["orders"]) == 2
+    assert killed == [], "proposing must cancel nothing"
+
+    trading.confirm()
+    assert killed == ["o1", "o2"]
+
+
+def test_cancel_all_by_symbol_only_touches_that_symbol(monkeypatch):
+    wire(monkeypatch, [PAPER])
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False: [
+        {"order_id": "o1", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
+        {"order_id": "o2", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
+    ])
+    killed = []
+    monkeypatch.setattr(st, "cancel_order", lambda oid: killed.append(oid))
+
+    trading.propose_cancel_all("aapl")
+    trading.confirm()
+
+    assert killed == ["o1"], "the NVDA order must survive"
+
+
+def test_one_failed_cancel_does_not_abandon_the_batch(monkeypatch):
+    """An order can fill in the gap between proposing and confirming. That's a
+    reason to report it, not to give up on the rest."""
+    wire(monkeypatch, [PAPER])
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False: [
+        {"order_id": "gone", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
+        {"order_id": "ok", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
+    ])
+
+    def flaky(oid):
+        if oid == "gone":
+            raise RuntimeError("order already filled")
+
+    monkeypatch.setattr(st, "cancel_order", flaky)
+
+    trading.propose_cancel_all()
+    result = trading.confirm()
+
+    assert [o["order_id"] for o in result["cancelled"]] == ["ok"]
+    assert [o["order_id"] for o in result["failed"]] == ["gone"]
+
+    from main import describe_fill
+    message = describe_fill(result)
+    assert "Cancelled 1 order" in message
+    assert "already" in message.lower() or "check your brokerage" in message.lower()
+
+
 # --- never lie about money -------------------------------------------------
 
 def test_describe_fill_never_raises():
