@@ -100,6 +100,23 @@ permission. Check it in isolation with:
 - "How would 5 shares of SpaceX fit into my portfolio?" *(needs the web)*
 - "Which brokerages am I connected to?" · "Can I connect Wealthsimple?"
 
+## Tests
+
+```sh
+./venv/bin/python -m pytest tests/ -q     # 40 tests, ~5s
+```
+
+No network, no microphone, no API keys — they run on a fresh clone with no `.env`. The suite
+targets the places where a bug would be **silent** rather than loud:
+
+| | |
+|---|---|
+| `test_portfolio_math.py` | The weights. "How would 5 shares of SpaceX fit?" is answered from this denominator — if it drifts, Snappy says a confident wrong percentage out loud, and nothing looks broken. |
+| `test_audio_vad.py` | Silence detection. Wrong one way it cuts you off mid-sentence; wrong the other way the mic hangs open. Only visible in the timing, so it's tested with a fake clock. |
+| `test_regressions.py` | Bugs that actually shipped once: Whisper parroting its own prompt, a tool error killing the answer, the panel stuck on "connecting…". |
+| `test_hotkey_and_threading.py` | Tap-vs-hold on ⌥, and the workers-mutate/timer-reads contract that every threading bug here came from breaking. |
+| `test_assistant.py` | The spoken/written split. If it breaks, Snappy reads markdown asterisks aloud. |
+
 ## Testing pieces in isolation
 
 Each stage runs on its own, which makes debugging far easier than chasing a failure through

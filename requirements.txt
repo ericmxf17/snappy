@@ -20,3 +20,6 @@ pyobjc-framework-Quartz
 pyobjc-framework-ApplicationServices  # AXIsProcessTrusted — the ⌥ hotkey needs Accessibility
 
 python-dotenv
+
+# Tests. They run offline with no credentials — nothing here reaches the network.
+pytest

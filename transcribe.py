@@ -35,10 +35,29 @@ CONTEXT = (
 )
 
 _prompt = CONTEXT
+_model = None
 
-# int8 on CPU: roughly 4x faster than fp32 with no meaningful accuracy loss at this
-# model size. Loading once at import keeps it off the critical path of a question.
-_model = WhisperModel(MODEL, device="cpu", compute_type="int8")
+
+def _get_model():
+    """Load once, on first use.
+
+    Deliberately not at import: that stalls app launch for seconds, and makes this
+    module unimportable in a test without paying for a model load. main.py warms it
+    on a background thread at startup, so the first question doesn't pay for it
+    either.
+
+    int8 on CPU is ~4x faster than fp32 with no meaningful accuracy loss at this
+    model size.
+    """
+    global _model
+    if _model is None:
+        _model = WhisperModel(MODEL, device="cpu", compute_type="int8")
+    return _model
+
+
+def warm():
+    """Load the model ahead of time. Call from a background thread."""
+    _get_model()
 
 
 def set_hints(held):
@@ -56,7 +75,7 @@ def set_hints(held):
 
 
 def transcribe(wav_path: str) -> str:
-    segments, _ = _model.transcribe(
+    segments, _ = _get_model().transcribe(
         wav_path,
         language="en",
         initial_prompt=_prompt,

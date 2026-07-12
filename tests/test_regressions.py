@@ -1,0 +1,132 @@
+"""Bugs that actually happened. Each of these shipped once.
+
+They're grouped here on purpose: every one was silent — nothing crashed, nothing
+logged, the app just did the wrong thing convincingly.
+"""
+
+import re
+
+import pytest
+
+import state
+import tools
+import transcribe
+
+
+# --- Whisper's prompt bled into the transcript -----------------------------
+# Passing the vocabulary as a comma-separated keyword list made Whisper parrot it
+# straight back: "buy five shares of Apple" came out as "buy, buy, buy, shares, of
+# Apple." The prompt has to read as prose.
+
+def test_hint_prompt_is_prose_not_a_keyword_list():
+    transcribe.set_hints(["AAPL", "NVDA"])
+    prompt = transcribe._prompt
+
+    assert prompt.endswith("."), "must be a sentence — Whisper parrots back a list"
+    assert ", ," not in prompt
+    # A keyword list is mostly commas. Prose is mostly words.
+    assert prompt.count(",") < len(prompt.split()) / 3
+
+
+def test_hints_include_the_tickers_you_hold():
+    transcribe.set_hints(["NVDA", "TSLA"])
+    assert "NVDA" in transcribe._prompt
+    assert "TSLA" in transcribe._prompt
+
+
+def test_no_holdings_still_produces_a_valid_prompt():
+    transcribe.set_hints([])
+    assert transcribe._prompt == transcribe.CONTEXT
+    assert "buy or sell" in transcribe._prompt   # the buy/by fix must survive
+
+
+def test_prompt_primes_the_trading_verbs():
+    """"buy" and "by" are homophones. Without priming, Whisper drops the verb:
+    "buy five shares of Apple" -> "BY five shares of Apple". A trade command
+    silently losing its verb is not an acceptable failure."""
+    transcribe.set_hints([])
+    assert re.search(r"\bbuy\b", transcribe._prompt)
+    assert re.search(r"\bsell\b", transcribe._prompt)
+
+
+# --- A tool error crashed the answer --------------------------------------
+# run_tool must return errors as TEXT, so Claude can explain them out loud, rather
+# than raising and killing the whole question.
+
+def test_tool_errors_come_back_as_text(state_reset):
+    def boom():
+        raise RuntimeError("brokerage connection expired")
+
+    tools.DISPATCH["_boom"] = boom
+    try:
+        result = tools.run_tool("_boom", {})
+    finally:
+        del tools.DISPATCH["_boom"]
+
+    assert isinstance(result, str)
+    assert "brokerage connection expired" in result
+
+
+def test_a_failed_tool_still_shows_up_in_the_trace(state_reset):
+    """The panel's trace is how you see what happened. A failure must appear."""
+    tools.DISPATCH["_boom"] = lambda: (_ for _ in ()).throw(ValueError("nope"))
+    try:
+        tools.run_tool("_boom", {})
+    finally:
+        del tools.DISPATCH["_boom"]
+
+    assert [c["name"] for c in state.STATE["calls"]] == ["_boom"]
+
+
+# --- The panel got stuck on "connecting…" ---------------------------------
+# snapshot() clears the dirty flag. If the UI builds a snapshot before the page can
+# receive it, the update vanishes and is never retried — the panel sits on its
+# placeholder forever.
+
+def test_snapshot_clears_dirty(state_reset):
+    state.update(status="listening")
+    assert state.is_dirty()
+
+    state.snapshot()
+    assert not state.is_dirty(), "snapshot must clear dirty, or the UI spins"
+
+
+def test_snapshot_is_a_copy_not_a_live_reference(state_reset):
+    """The UI thread reads the snapshot while workers keep mutating STATE. If the
+    snapshot shared a list, the panel could render a half-written update."""
+    state.record_call("get_quote", 12)
+    snap = state.snapshot()
+
+    state.record_call("web_search", 900)          # worker keeps going
+    assert len(snap["calls"]) == 1, "snapshot must not see later mutations"
+
+
+def test_mic_level_does_not_mark_state_dirty(state_reset):
+    """The waveform has its own 20fps push. If set_level dirtied the state, every
+    audio callback would trigger a full panel re-render."""
+    state.snapshot()                              # clear
+    state.set_level(0.7)
+    assert not state.is_dirty()
+    assert state.STATE["level"] == 0.7
+
+
+def test_a_new_question_clears_the_previous_answer(state_reset):
+    """Narration and stale answers must not bleed into the next question."""
+    state.update(question="old?", answer="old answer")
+    state.record_call("get_quote", 5)
+
+    state.start_question("new?")
+
+    assert state.STATE["question"] == "new?"
+    assert state.STATE["answer"] == ""
+    assert state.STATE["calls"] == []
+
+
+def test_finishing_a_question_files_it_into_history(state_reset):
+    state.start_question("what's my balance?")
+    state.append_answer("A hundred thousand.")
+    state.finish_question()
+
+    assert state.STATE["history"][0]["question"] == "what's my balance?"
+    assert state.STATE["history"][0]["answer"] == "A hundred thousand."
+    assert state.STATE["question"] == ""          # cleared for the next one

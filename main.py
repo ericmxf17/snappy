@@ -104,6 +104,9 @@ class Snappy(rumps.App):
         rumps.Timer(self.tick, 0.15).start()
         rumps.Timer(self.tick_level, 0.05).start()  # waveform wants ~20fps
         threading.Thread(target=self.refresh_portfolio, daemon=True).start()
+        # Load Whisper off the main thread so launch is instant and the first
+        # question doesn't pay for the model load either.
+        threading.Thread(target=transcribe.warm, daemon=True).start()
 
     # --- setup, once the run loop exists -----------------------------------
 
