@@ -63,6 +63,35 @@ def notify(text):
     state.notify(text)
 
 
+def describe_fill(filled):
+    """Describe a placed order. MUST NOT RAISE.
+
+    This ran inside the try/except that reports trade failures, so when it threw a
+    TypeError on a null field it was caught and reported as "the order didn't go
+    through — nothing was placed". The order HAD gone through. A formatting bug must
+    never be able to impersonate a failed trade, so every field here is optional.
+    """
+    try:
+        verb = "Bought" if filled.get("action") == "BUY" else "Sold"
+        parts = [verb]
+
+        units = filled.get("units")
+        parts.append(f"{units:g} shares of" if isinstance(units, (int, float)) else "shares of")
+        parts.append(str(filled.get("symbol") or "the symbol"))
+
+        price = filled.get("price")
+        if isinstance(price, (int, float)):
+            parts.append(f"at about ${price:,.2f}")
+        elif isinstance(filled.get("estimated_cost"), (int, float)):
+            parts.append(f"for about ${filled['estimated_cost']:,.2f}")
+
+        line = " ".join(parts) + "."
+        status = filled.get("status")
+        return f"{line} Order {status}." if status else line
+    except Exception:  # belt and braces: a wording bug is not a trading failure
+        return "Order placed. Check your brokerage for the fill."
+
+
 class _StatusTarget(NSObject):
     """Receives clicks on the menubar button.
 
@@ -391,22 +420,25 @@ class Snappy(rumps.App):
         else:
             try:
                 filled = trading.confirm()
-                shares = filled["units"]
-                verb = "Bought" if filled["action"] == "BUY" else "Sold"
-                price = filled.get("price") or filled.get("estimated_cost", 0) / max(shares, 1)
-                message = (
-                    f"Done. {verb} {shares:g} shares of {filled['symbol']}"
-                    f" at about {price:,.0f} dollars."
-                )
-                state.update(pending=None, answer=f"{message}\n\nOrder {filled.get('status') or 'submitted'}.")
             except trading.TradeRefused as e:
-                message = str(e)
-                state.update(pending=None, answer=message)
+                # A guard said no. The guards all run BEFORE the order is sent, so
+                # this genuinely means nothing was placed.
+                state.update(pending=None, status="answered")
+                notify(str(e))
             except Exception as e:
+                # The order was sent and something went wrong. We do NOT know whether
+                # it reached the brokerage, so we must not say it didn't — this
+                # handler once announced "Nothing was placed" about an order that had
+                # in fact filled. Never assert a fact about someone's money that you
+                # have not checked.
                 print("ERROR placing order:", e)
-                message = "The order didn't go through. Nothing was placed."
-                state.update(pending=None, answer=message)
-            notify(message)
+                state.update(pending=None, status="answered")
+                notify(
+                    "I couldn't read back the result of that order. It may have gone "
+                    "through — check your brokerage before trying again."
+                )
+            else:
+                notify(describe_fill(filled))
 
         self.refresh_portfolio()
         state.finish_question()

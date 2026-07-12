@@ -243,6 +243,52 @@ def test_anything_unclear_leaves_the_order_standing(said):
     assert not trading.is_cancellation(said)     # ...but never destroys it either
 
 
+# --- never lie about money -------------------------------------------------
+
+def test_describe_fill_never_raises():
+    """This ran INSIDE the try/except that reports trade failures.
+
+    Alpaca returns null units/price for a market order that hasn't filled yet. That
+    made f"{units:g}" throw a TypeError, which was caught and announced as "the order
+    didn't go through — nothing was placed". The order HAD gone through; it was
+    sitting in the user's account while the app said it wasn't.
+
+    A formatting bug must never be able to impersonate a failed trade.
+    """
+    from main import describe_fill
+
+    for fill in (
+        {},
+        {"action": "BUY"},
+        {"action": "BUY", "units": None, "price": None, "symbol": None},
+        {"action": "SELL", "units": 5.0, "symbol": "AAPL", "price": 315.33, "status": "FILLED"},
+        {"action": "BUY", "units": 5.0, "symbol": "AAPL", "estimated_cost": 1576.65},
+        {"action": "BUY", "units": "five"},          # wrong type entirely
+    ):
+        out = describe_fill(fill)
+        assert isinstance(out, str) and out
+        # It must never claim failure — this function is only called on SUCCESS.
+        assert "didn't go through" not in out
+        assert "Nothing was placed" not in out
+
+
+def test_a_placed_order_keeps_the_previews_numbers(monkeypatch):
+    """The brokerage's response is merged OVER the preview. Null fields in that
+    response must not blank out numbers we already know."""
+    wire(monkeypatch, [PAPER], price=300.0)
+
+    # A market order that hasn't filled yet: no units, no price.
+    monkeypatch.setattr(st, "place_previewed_trade",
+                        lambda tid: {"order_id": "o1", "status": "PENDING"})
+
+    trading.propose("BUY", "AAPL", 5)
+    filled = trading.confirm()
+
+    assert filled["units"] == 5.0, "the preview's size must survive"
+    assert filled["symbol"] == "AAPL"
+    assert filled["status"] == "PENDING"
+
+
 def test_the_confirmation_mic_stops_on_silence():
     """The confirmation recording must auto-stop when you stop talking.
 

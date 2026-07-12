@@ -220,7 +220,8 @@ def place_previewed_trade(trade_id):
     place_force_order, which skips validation entirely. It is never called.)
     """
     result = _client.trading.place_order(trade_id=trade_id, **_USER).body
-    return {
+
+    fill = {
         "order_id": result.get("brokerage_order_id"),
         "status": result.get("status"),
         "symbol": ((result.get("universal_symbol") or {}).get("symbol")),
@@ -228,6 +229,12 @@ def place_previewed_trade(trade_id):
         "filled_units": result.get("filled_quantity"),
         "price": result.get("execution_price") or result.get("price"),
     }
+    # Drop the empty keys. A market order that hasn't filled yet comes back with
+    # units and price as null, and the caller merges this over the preview — so
+    # leaving them in would BLANK OUT the numbers we already know from the preview.
+    # That is exactly what happened: `units` became None, formatting the success
+    # message threw, and the app told the user the order had failed. It had not.
+    return {k: v for k, v in fill.items() if v is not None}
 
 
 def list_connections():
