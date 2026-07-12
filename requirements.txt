@@ -1,0 +1,9 @@
+anthropic
+snaptrade-python-sdk
+openai-whisper
+sounddevice
+soundfile
+numpy
+rumps
+pyobjc-framework-ApplicationServices  # AXIsProcessTrusted — the global hotkey needs Accessibility
+python-dotenv
