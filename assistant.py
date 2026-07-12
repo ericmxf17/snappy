@@ -1,7 +1,9 @@
 """The brain: turns a spoken question into an answer, using the user's real
 brokerage data (via SnapTrade) and the open web (via Claude's server-side search).
 
-The answer's FIRST PARAGRAPH is what gets spoken; the rest is detail for the panel.
+The answer's FIRST PARAGRAPH is the headline shown large in the panel; the rest is
+supporting detail. Snappy listens, but it does not talk back — answers are read, not
+heard.
 """
 
 import time
@@ -15,19 +17,20 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 MAX_TURNS = 8  # a runaway search loop shouldn't be able to hang a live demo
 
-SYSTEM_PROMPT = """You are Snappy, a voice assistant with live access to the user's real \
-brokerage accounts (through SnapTrade) and to the web.
+SYSTEM_PROMPT = """You are Snappy. The user speaks their question; you answer in writing, \
+on screen. You have live access to their real brokerage accounts (through SnapTrade) and to \
+the web.
 
 FORMAT — this matters, read carefully:
-Your first paragraph is SPOKEN OUT LOUD. Everything after it is only shown on screen.
+Your first paragraph is the HEADLINE, shown large and read first. Everything after it is \
+supporting detail.
 
 - First paragraph: AT MOST two short sentences, under 35 words total. Lead with the answer — \
-no preamble, no throat-clearing, no restating the question. Say numbers the way a person would \
-("about two thousand dollars", "roughly two percent"). No markdown, no symbols, no lists — it \
-is going through a speech synthesizer. If a figure is a rough estimate, one word ("roughly", \
-"around") is enough; save the caveats for the detail below.
+no preamble, no throat-clearing, no restating the question. Plain prose, no markdown and no \
+bullets: this line is the answer, and it has to land in one glance. If a figure is a rough \
+estimate, one word ("roughly", "around") is enough; save the caveats for the detail below.
 - Then a blank line, then the supporting detail: the figures you found, the arithmetic, and \
-any caveats. Short lines. You may use "-" bullets here.
+any caveats. Short lines. You may use "-" bullets and **bold** here.
 
 RESEARCH — you are talking to someone waiting in silence, so be decisive:
 - Search ONCE with a well-chosen query. Read what comes back before searching again. Do not \
@@ -41,12 +44,12 @@ market-data page a search result pointed you at) and the snippet was not enough.
 TRADING — read this carefully:
 - To buy or sell, call preview_trade. It PROPOSES the order; it does not place it. You \
 have no tool that can place an order, and you never will.
-- Never say a trade is done, placed, bought, or sold. It isn't. The app places it, only \
-after the user says "confirm" out loud, and the app tells them the result itself.
-- After previewing, your spoken line must state the SHARES, the DOLLAR COST, and what \
-PERCENT of their portfolio it would be, then ask them to say confirm. The dollar figure is \
-the safety net: "buy fifty" misheard as "buy fifteen" sounds fine, but "seven thousand \
-dollars, seven percent of your portfolio" sounds obviously wrong.
+- Never say a trade is done, placed, bought, or sold. It isn't. The app places it, only after \
+the user confirms, and the app reports the result itself.
+- After previewing, your headline must state the SHARES, the DOLLAR COST, and what PERCENT of \
+their portfolio it would be, then tell them to say "confirm" or press the button. The dollar \
+figure is the safety net: "buy fifty" misheard as "buy fifteen" reads fine, but "$7,000 — 7% of \
+your portfolio" is obviously wrong at a glance.
 - If preview_trade returns a refusal, say the reason plainly. Do not argue with it, do not \
 retry it with different numbers, and do not suggest a workaround.
 
@@ -111,15 +114,12 @@ def _stream_turn(messages, container, on_text):
         return stream.get_final_message(), container
 
 
-def answer(transcript: str, on_text=None, on_reset=None, on_narration=None) -> str:
+def answer(transcript: str, on_text=None, on_reset=None) -> str:
     """Run the question to completion. Returns the final answer text.
 
-    on_text       — each chunk of the answer, as it streams.
-    on_reset      — the text so far was narration before a tool call, not the answer;
-                    drop it.
-    on_narration  — that same narration, handed over rather than thrown away. A
-                    web-searching answer can take 30 seconds, and "I'll look that up"
-                    spoken at second two is the difference between thinking and dead.
+    on_text   — each chunk of the answer, as it streams.
+    on_reset  — the text so far was narration before a tool call ("let me look that
+                up"), not the answer. Drop it.
     """
     messages = [{"role": "user", "content": transcript}]
     container = None
@@ -168,13 +168,10 @@ def answer(transcript: str, on_text=None, on_reset=None, on_narration=None) -> s
             break
 
         # Whatever it said this turn was narration ahead of a tool call, not the
-        # answer. Drop it from the panel — but say it out loud, because the user is
-        # otherwise listening to nothing at all while the searches run.
-        said = "".join(turn_text).strip()
+        # answer. Drop it — the panel shows the live tool trace instead, which is
+        # more informative than "let me look that up".
         if on_reset:
             on_reset()
-        if said and on_narration:
-            on_narration(said)
 
         messages.append(
             {
@@ -193,8 +190,8 @@ def answer(transcript: str, on_text=None, on_reset=None, on_narration=None) -> s
     return "".join(turn_text).strip() or "Sorry, I didn't catch that."
 
 
-def spoken_part(text: str) -> str:
-    """The first paragraph — the only bit that should be read aloud."""
+def headline(text: str) -> str:
+    """The first paragraph — the answer itself, shown large. The rest is detail."""
     return text.split("\n\n", 1)[0].strip()
 
 
@@ -207,10 +204,10 @@ if __name__ == "__main__":
     result = answer(
         question,
         on_text=lambda t: print(t, end="", flush=True),
-        on_reset=lambda: print("\n  [narration — spoken, then dropped]\n"),
+        on_reset=lambda: print("\n  [narration dropped — calling tools]\n"),
     )
     print("\n" + "─" * 60)
-    print(f"SPOKEN: {spoken_part(result)}")
+    print(f"HEADLINE: {headline(result)}")
     if state.STATE["calls"]:
         print("CALLS :", [f"{c['name']}({c['detail']})" if c["detail"] else c["name"]
                           for c in state.STATE["calls"]])

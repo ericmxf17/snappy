@@ -243,15 +243,6 @@ def test_anything_unclear_leaves_the_order_standing(said):
     assert not trading.is_cancellation(said)     # ...but never destroys it either
 
 
-def test_the_speech_lock_serialises_talking():
-    """Several threads speak (narration, the answer, a trade result). Without a
-    lock, two pass the "am I already talking?" check together and you hear both
-    at once — which is also how the mic ends up open while Snappy is speaking."""
-    import main
-    assert main._speech_lock is not None
-    assert hasattr(main, "is_speaking")
-
-
 def test_the_confirmation_mic_stops_on_silence():
     """The confirmation recording must auto-stop when you stop talking.
 

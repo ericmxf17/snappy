@@ -22,6 +22,7 @@ STATE = {
     "positions": [],
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
     "pending": None,  # a proposed trade awaiting your yes — see trading.py
+    "notice": "",  # a short status line: "cancelled", "I didn't hear anything"
     "dirty": True,
 }
 
@@ -62,7 +63,16 @@ def add_sources(sources):
 
 def start_question(question=""):
     with _lock:
-        STATE.update(question=question, answer="", calls=[], sources=[], dirty=True)
+        STATE.update(
+            question=question, answer="", calls=[], sources=[], notice="", dirty=True
+        )
+
+
+def notify(text):
+    """A short status line for the panel. Snappy has no voice — this is how it talks."""
+    with _lock:
+        STATE["notice"] = text
+        STATE["dirty"] = True
 
 
 def finish_question():

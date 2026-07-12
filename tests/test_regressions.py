@@ -40,6 +40,24 @@ def test_no_holdings_still_produces_a_valid_prompt():
     assert "buy or sell" in transcribe._prompt   # the buy/by fix must survive
 
 
+def test_snappy_has_no_voice():
+    """Text-to-speech is gone, and it must stay gone.
+
+    A laptop mic sitting beside a laptop speaker is an echo path. It cost a string
+    of bugs — the worst being the confirmation mic recording Snappy's OWN read-back,
+    transcribing "say confirm to place the trade", deciding that wasn't a yes, and
+    talking Snappy out of its own trade. If `say` comes back, so do those.
+    """
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    # transcribe.py is exempt: its self-test uses `say` to GENERATE a test WAV.
+    # That's input, not output.
+    for name in ("main.py", "assistant.py", "trading.py", "ui.py", "tools.py"):
+        source = (root / name).read_text()
+        assert '["say"' not in source, f"{name} shells out to `say`"
+        assert "['say'" not in source, f"{name} shells out to `say`"
+
+
 def test_transcribe_can_be_asked_for_no_prompt_at_all():
     """The confirmation step MUST be able to transcribe with no vocabulary priming.
 

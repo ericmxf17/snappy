@@ -1,8 +1,13 @@
 # Snappy
 
-A voice assistant for your brokerage account. **Hold ⌥, ask a question out loud, let go** —
-and hear the answer, with live data pulled from your real connected brokerage via
-[SnapTrade](https://snaptrade.com) and, when the question needs it, the open web.
+Ask your brokerage account a question out loud. **Hold ⌥, speak, let go** — the answer is
+written into a floating glass panel, with live data pulled from your real connected brokerage
+via [SnapTrade](https://snaptrade.com) and, when the question needs it, the open web.
+
+You speak; it writes. There is deliberately **no text-to-speech**: a laptop mic sitting beside
+a laptop speaker is an echo path, and it cost a string of bugs — the worst being the trade
+confirmation recording Snappy's own voice saying *"say confirm to place the trade"*, deciding
+that wasn't a yes, and talking itself out of its own trade.
 
 > "What's my balance?" → *"You have about a hundred thousand dollars in cash."*
 >
@@ -16,9 +21,9 @@ A portfolio dashboard structurally cannot answer that.
 
 It can also **trade** — but only paper accounts, and only after you confirm out loud:
 
-> *"Buy 5 shares of Apple."* → *"Five shares of Apple would cost about fifteen hundred
-> seventy-seven dollars, roughly one point six percent of your portfolio. Say confirm to
-> place the trade."* → *"Confirm."* → *"Done. Bought 5 shares of AAPL at about $315."*
+> *"Buy 5 shares of Apple."* → **5 shares of Apple would cost about $1,576.65 — roughly 1.6%
+> of your $100,000 portfolio. Say "confirm" to proceed.** → say *"confirm"* (or click the
+> button) → **Done. Bought 5 shares of AAPL at about $315.**
 
 ## Safety
 
@@ -56,9 +61,9 @@ Every guard fails **closed**:
 | One at a time | A new proposal replaces the old one. No ambiguity about what "confirm" means. |
 | Market orders only | No options, no crypto, no shorting. `place_force_order` (which skips validation) is never called. |
 
-The spoken read-back always states the **dollar cost and portfolio percentage**, not just the share
-count — because "buy fifty" misheard as "buy fifteen" sounds fine, but *"seven thousand dollars,
-seven percent of your portfolio"* sounds obviously wrong.
+The read-back always leads with the **dollar cost and portfolio percentage**, not the share count —
+because "buy fifty" misheard as "buy fifteen" reads fine, but *"$7,000 — 7% of your portfolio"* is
+obviously wrong at a glance.
 
 See [trading.py](trading.py) — it's the only file that can move money, and it's deliberately short
 enough to read in one sitting.
@@ -69,13 +74,12 @@ enough to read in one sitting.
 hold ⌥  →  record mic  →  Whisper (local)  →  Claude ─┬─→ SnapTrade API  (your real accounts)
                                                       └─→ web search     (prices, news, valuations)
                                                               ↓
-     glass panel: math, sources, API trace  ←──────  full written answer
-     macOS `say` speaks the summary         ←──────  first paragraph only
+     glass panel  ←──  headline, then the arithmetic, the sources, the API trace
 ```
 
 Speech-to-text runs locally — no audio leaves the machine. Claude decides which SnapTrade
 endpoint answers the question, searches the web when the answer isn't in your account, and
-writes an answer whose **first paragraph is spoken** while the detail stays on screen.
+writes an answer whose **first paragraph is the headline**, with the detail below it.
 
 The transcriber is primed with the tickers you actually hold and the brokerage names SnapTrade
 supports, which is why it hears *NVDA* rather than *and video*, and *buy five shares* rather

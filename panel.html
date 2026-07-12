@@ -150,6 +150,11 @@
   body[data-hotkey="off"] #banner { display: block; }
   body[data-hotkey="off"] .opt { opacity: .38; text-decoration: line-through; }
 
+  /* ---- notice ---------------------------------------------------------- */
+  /* Snappy has no voice, so anything it would have said lands here. */
+  .notice { font-size: 12px; color: var(--text); background: rgba(255,255,255,.06);
+            border: 1px solid var(--line); border-radius: 9px; padding: 8px 11px; }
+
   /* ---- proposed trade -------------------------------------------------- */
   /* Deliberately the loudest thing on screen. This is the only card that can
      move money, and the dollar cost is the headline because that's the figure
@@ -340,6 +345,7 @@
     const live = s.question || s.answer;
     const parts = [];
 
+    if (s.notice) parts.push(`<div class="notice">${esc(s.notice)}</div>`);
     if (s.pending) parts.push(tradeHTML(s.pending, s.total_value));
     if (live) parts.push(turnHTML(s, s.status === 'thinking'));
     for (const h of s.history) parts.push(turnHTML(h, false));

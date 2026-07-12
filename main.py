@@ -1,9 +1,12 @@
-"""Snappy — a voice assistant for your brokerage accounts.
+"""Snappy — ask your brokerage account a question out loud.
 
-Hold Right ⌥ and talk, or click the menubar icon and just stop talking. It
-transcribes locally, asks Claude (which pulls live data from SnapTrade and
-searches the web), speaks a short answer, and shows the reasoning in a floating
-glass panel.
+Hold Right ⌥ and talk. It transcribes locally, asks Claude (which pulls live data
+from SnapTrade and searches the web), and writes the answer into a floating glass
+panel — the headline first, then the arithmetic, the sources, and the API trace.
+
+You speak; it writes. There is deliberately no text-to-speech: a laptop mic beside a
+laptop speaker is an echo path, and it cost us a string of bugs — including Snappy
+recording its own voice and talking itself out of its own trade.
 
 Run with:  ./venv/bin/python main.py
 """
@@ -25,7 +28,7 @@ import state
 import trading
 import transcribe
 import ui
-from assistant import answer, spoken_part
+from assistant import answer
 
 # SF Symbols render as template images: vector, monochrome, and they pick up the
 # menubar's tint automatically — unlike an emoji, which looks pasted on.
@@ -45,50 +48,19 @@ ACCESSIBILITY_PANE = (
 # "that order expired".
 AUTOSTOP_TRIGGERS = ("click", "confirm")
 
-# Ticks (of the 0.15s timer) to let the speakers fall quiet after Snappy stops
-# talking, before opening the mic. The `say` process exits slightly before its
-# audio has finished leaving the speakers.
-SETTLE_TICKS = 3
 
 
-_speaking = None  # the `say` process currently talking, if any
-_speech_lock = threading.Lock()
-
-
-def say_now(text):
-    """Speak, and don't return until it's done."""
-    _say(text).wait()
-
-
-def say_soon(text):
-    """Start speaking and return immediately — the search shouldn't wait on audio."""
-    _say(text)
-
-
-def is_speaking():
-    """Is Snappy talking right now?
-
-    The mic must never open while it is. Without this check, the confirmation
-    recording captured Snappy's OWN voice reading the order back — it transcribed
-    "say confirm to place the trade", correctly decided that wasn't a yes, and
-    talked itself out of its own trade.
-    """
-    return _speaking is not None and _speaking.poll() is None
-
-
-def _say(text):
-    """Never talk over ourselves.
-
-    The lock is load-bearing: several threads speak (the narration during a search,
-    the answer, a trade result). Without it two of them pass the "am I already
-    talking?" check at the same moment and you hear both at once.
-    """
-    global _speaking
-    with _speech_lock:
-        if _speaking is not None and _speaking.poll() is None:
-            _speaking.wait()
-        _speaking = subprocess.Popen(["say", text])
-        return _speaking
+# Snappy has no voice. It listens, and it answers on the panel.
+#
+# Text-to-speech is gone deliberately, and it took a whole class of bugs with it:
+# a laptop mic sitting beside a laptop speaker is an echo path, and the confirmation
+# recording kept capturing Snappy's own read-back — transcribing "say confirm to
+# place the trade", deciding that wasn't a yes, and talking itself out of its own
+# trade. No speech, no echo, no speech-lock races, no settle delays.
+def notify(text):
+    """Say something to the user. On screen, where it can be re-read."""
+    print(f"→ {text}")
+    state.notify(text)
 
 
 class _StatusTarget(NSObject):
@@ -128,7 +100,6 @@ class Snappy(rumps.App):
         self.icon_state = None
         self.target = None  # strong ref: PyObjC won't retain the click target
         self.want_confirm = False  # a worker asks the main thread to reopen the mic
-        self.settle = SETTLE_TICKS  # let the speakers go quiet before the mic opens
 
         self.menu = ["Ask Snappy", "Show panel", None]
 
@@ -194,18 +165,9 @@ class Snappy(rumps.App):
         # A worker proposed a trade and wants the mic reopened to hear a yes. Only
         # the main thread may do that — starting a recording shows the panel.
         #
-        # Wait until Snappy has actually stopped talking, then give the speakers a
-        # moment to fall quiet. Opening the mic mid-sentence means it records its own
-        # read-back, transcribes "say confirm to place the trade", and decides that
-        # isn't a yes — Snappy talking itself out of its own trade.
         if self.want_confirm and not self.recording:
-            if is_speaking():
-                self.settle = SETTLE_TICKS
-            elif self.settle > 0:
-                self.settle -= 1
-            else:
-                self.want_confirm = False
-                self.start("confirm")
+            self.want_confirm = False
+            self.start("confirm")
 
         # Don't touch the dirty flag until the page can actually receive the
         # update — building the snapshot clears it, and a push into a half-loaded
@@ -309,7 +271,7 @@ class Snappy(rumps.App):
             audio.start_recording()
         except Exception as e:
             print("ERROR starting mic:", e)
-            say_now("I couldn't access the microphone. Check System Settings.")
+            notify("I couldn't access the microphone. Check System Settings.")
             return
         self.recording = True
         self.trigger = trigger
@@ -334,7 +296,7 @@ class Snappy(rumps.App):
                 # Silence is not consent. Say nothing, place nothing.
                 self.resolve_trade(confirmed=False, heard="")
             else:
-                say_now("I didn't hear anything.")
+                notify("I didn't hear anything.")
             return
 
         target = self.run_confirm if was == "confirm" else self.run_voice
@@ -369,10 +331,6 @@ class Snappy(rumps.App):
                 # Claude narrates before calling tools ("let me look that up").
                 # That isn't the answer, so drop it from the panel...
                 on_reset=lambda: state.update(answer=""),
-                # ...but say it out loud. A researched answer takes ten seconds or
-                # more, and without this the user is listening to dead air the whole
-                # time, wondering whether it heard them at all.
-                on_narration=self.say_soon,
             )
             print(f"reply: {reply!r}")
         except Exception as e:
@@ -382,8 +340,6 @@ class Snappy(rumps.App):
 
         state.update(status="answered")
         self.refresh_portfolio()
-
-        say_now(spoken_part(reply))  # only the first paragraph is meant to be heard
 
         # Claude may have PROPOSED a trade. It cannot place one. If there's an order
         # waiting, reopen the mic and listen for a yes — but ask the main thread to
@@ -397,10 +353,6 @@ class Snappy(rumps.App):
 
         state.finish_question()
         state.update(status="idle")
-
-    def say_soon(self, text):
-        """Speak filler without blocking the search that's already running."""
-        threading.Thread(target=say_soon, args=(text,), daemon=True).start()
 
     # --- confirming a trade -------------------------------------------------
     # The model is not involved in any of this. It proposed an order; whether that
@@ -429,13 +381,13 @@ class Snappy(rumps.App):
         """
         if not confirmed and not trading.is_cancellation(heard):
             state.update(status="confirming")
-            say_now("I'll wait. Say confirm, or use the button.")
+            notify("Still waiting — say “confirm”, or use the button.")
             return
 
         if not confirmed:
             trading.cancel()
             state.update(pending=None, status="answered")
-            say_now("Cancelled. I didn't place anything.")
+            notify("Cancelled — nothing was placed.")
         else:
             try:
                 filled = trading.confirm()
@@ -454,7 +406,7 @@ class Snappy(rumps.App):
                 print("ERROR placing order:", e)
                 message = "The order didn't go through. Nothing was placed."
                 state.update(pending=None, answer=message)
-            say_now(message)
+            notify(message)
 
         self.refresh_portfolio()
         state.finish_question()
