@@ -224,13 +224,16 @@ class Snappy(rumps.App):
     # --- triggers ----------------------------------------------------------
 
     def left_click(self):
-        """Click the icon: stop if recording, otherwise start."""
-        if self.recording:
-            self.stop()
-        elif state.STATE["status"] == "thinking":
-            ui.show()  # already working — just bring the panel back
+        """Click the icon: show or hide the panel. It never opens the mic.
+
+        Recording is always a deliberate act — hold ⌥, or pick "Ask Snappy" from
+        the right-click menu. A click that silently starts listening is a nasty
+        surprise, and more so now that Snappy can place trades.
+        """
+        if ui.is_visible():
+            ui.hide()
         else:
-            self.start("click")
+            ui.show()
 
     def hold_start(self):
         if not self.recording:

@@ -201,12 +201,13 @@
     <div class="hero">
       <div class="value" id="value">—</div>
       <div class="sub" id="sub">connecting…</div>
-      <div class="trig"><span class="opt">Hold <kbd>⌥</kbd> to talk</span> · or click the icon</div>
+      <div class="trig"><span class="opt">Hold <kbd>⌥</kbd> to talk</span> · or type below</div>
     </div>
 
     <div id="banner">
       <b>⌥ is off.</b> Grant Accessibility in System&nbsp;Settings → Privacy&nbsp;&amp; Security
-      → Accessibility, then relaunch Snappy. Clicking the icon works either way.
+      → Accessibility, then relaunch Snappy. Until then, type below — or right-click the
+      menubar icon and choose <b>Ask Snappy</b>.
     </div>
 
     <div id="feed"></div>
@@ -358,6 +359,7 @@
     if (!parts.length) {
       parts.push(`<div class="card hint">
         <span class="opt">Hold <kbd>⌥</kbd>, speak, let go.</span> Or type below.<br>
+        <span style="opacity:.7">Clicking the icon just shows this panel.</span><br>
         <kbd>What's my balance?</kbd> <kbd>Do I own Apple?</kbd><br>
         <kbd>How would 5 shares of SpaceX fit?</kbd><br>
         <kbd>Which brokerages am I connected to?</kbd>

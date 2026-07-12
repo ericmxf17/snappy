@@ -86,10 +86,14 @@ than *by five shares*.
 | | |
 |---|---|
 | **Hold ⌥** (right Option) | Speak, let go. Works from any app. Needs Accessibility — see below. |
-| **Click the menubar icon** | Speak, then just stop talking — it hears the silence and sends. |
 | **Type in the panel** | For when the room is too loud to talk. |
+| **Right-click → Ask Snappy** | Explicit fallback if the ⌥ hotkey isn't granted. Speak, then stop — it hears the silence and sends. |
 
 Tapping ⌥ instead of holding it also works: it leaves the mic open and silence ends it.
+
+**Left-clicking the menubar icon only shows or hides the panel — it never opens the mic.**
+Recording is always a deliberate act. An icon that silently starts listening is a nasty
+surprise, and more so in an app that can place trades.
 
 ## Setup
 
