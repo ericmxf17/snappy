@@ -39,6 +39,23 @@ class _Panel(AppKit.NSPanel):
         return True
 
 
+class _WebView(WebKit.WKWebView):
+    """A web view whose buttons work on a panel that never takes focus.
+
+    macOS treats a click on an INACTIVE window as a "first mouse" event: it uses
+    that click to activate the window and swallows it, rather than delivering it to
+    the content. Snappy's panel is deliberately non-activating — it must not steal
+    focus from whatever you're working in — so it is never active, so EVERY click is
+    a first-mouse click, so every click was being eaten. Buttons looked dead.
+
+    (A synthetic .click() from JavaScript worked fine throughout, because it never
+    goes through AppKit. That's what made this so confusing to diagnose.)
+    """
+
+    def acceptsFirstMouse_(self, event):
+        return True
+
+
 class _Nav(NSObject):
     """Tells us when the page has actually loaded.
 
@@ -164,7 +181,7 @@ def create():
     conf = WebKit.WKWebViewConfiguration.alloc().init()
     conf.setUserContentController_(controller)
 
-    _webview = WebKit.WKWebView.alloc().initWithFrame_configuration_(
+    _webview = _WebView.alloc().initWithFrame_configuration_(
         NSMakeRect(0, 0, WIDTH, HEIGHT), conf
     )
     _webview.setAutoresizingMask_(
