@@ -166,6 +166,11 @@
                 text-transform: uppercase; color: var(--amber); }
   .trade .sym { font: 600 15px ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); }
   .trade .qty { font-size: 12px; color: var(--dim); margin-left: auto; }
+  /* The company NAME, not just the ticker. SnapTrade's symbol search ranks
+     "Apple Hospitality REIT" above "Apple Inc.", so a wrong ticker is a real
+     possibility — and the read-back is where you catch it. "AZQ · Amazon.com CDR"
+     looks wrong in a way that "AZQ" alone does not. */
+  .trade .co { font-size: 11px; color: var(--dim); margin-top: 4px; }
   .trade .cost { font: 500 24px/1.2 ui-monospace, "SF Mono", Menlo, monospace;
                  color: var(--text); margin-top: 8px; font-variant-numeric: tabular-nums; }
   .trade .of { font-size: 11px; color: var(--dim); margin-top: 3px; }
@@ -358,7 +363,8 @@
       ${killing
         ? `<div class="cost" style="font-size:17px">Call back the ${esc((t.action||'').toLowerCase())} order</div>
            <div class="of">It won't fill at the next open.</div>`
-        : `<div class="cost">${money(t.estimated_cost)}</div>
+        : `${t.description ? `<div class="co">${esc(t.description)}</div>` : ''}
+           <div class="cost">${money(t.estimated_cost)}</div>
            <div class="of">
              ${pct != null ? `${pct.toFixed(2)}% of your portfolio` : ''}
              ${t.price != null ? ` · at ${money(t.price)}/share` : ''}

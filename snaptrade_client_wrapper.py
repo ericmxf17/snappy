@@ -4,6 +4,8 @@ Each function returns plain dicts/lists (not SDK response objects) so the result
 can be handed straight to Claude as tool output.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import config
 from snaptrade_client import SnapTrade
 
@@ -337,6 +339,294 @@ def cancel_order(order_id, account_id=None):
         account_id=account_id, brokerage_order_id=order_id, **_USER
     ).body
     return {"order_id": order_id, "status": dict(result).get("status")}
+
+
+def get_all_holdings():
+    """Every position across EVERY connected brokerage, with true combined weights.
+
+    This is the feature that cannot exist without SnapTrade. Alpaca can tell you what
+    you hold at Alpaca; it has no idea what you hold at Wealthsimple. The unification
+    layer is the whole product, and this is what it buys you.
+
+    (SnapTrade's own get_all_user_holdings returns 410 Gone, so it's assembled here
+    from list_user_accounts + per-account positions.)
+    """
+    accounts = list_accounts()
+    if not accounts:
+        raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+
+    books, total_cash, total_holdings = [], 0.0, 0.0
+    combined = {}  # symbol -> the true, cross-account position
+
+    for account in accounts:
+        aid = account["account_id"]
+        try:
+            balances = get_account_balance(aid)
+            positions = get_positions(aid)
+        except Exception as e:  # one broken connection must not blind the others
+            books.append({**account, "error": str(e)})
+            continue
+
+        usd = next((b for b in balances if b["currency"] == "USD"), balances[0] if balances else {})
+        cash = usd.get("cash") or 0.0
+        total_cash += cash
+
+        value = 0.0
+        for p in positions:
+            worth = (p["units"] or 0) * (p["price"] or 0)
+            value += worth
+            slot = combined.setdefault(
+                p["symbol"], {"symbol": p["symbol"], "units": 0.0, "market_value": 0.0, "accounts": []}
+            )
+            slot["units"] += p["units"] or 0
+            slot["market_value"] = round(slot["market_value"] + worth, 2)
+            slot["accounts"].append({"brokerage": account["institution"], "units": p["units"]})
+
+        total_holdings += value
+        books.append({**account, "cash": round(cash, 2), "holdings_value": round(value, 2),
+                      "positions": positions})
+
+    net_worth = total_cash + total_holdings
+    for slot in combined.values():
+        slot["weight_pct"] = round(100 * slot["market_value"] / net_worth, 2) if net_worth else 0.0
+        slot["held_in"] = len(slot["accounts"])
+
+    holdings = sorted(combined.values(), key=lambda h: h["market_value"], reverse=True)
+
+    return {
+        "net_worth": round(net_worth, 2),
+        "total_cash": round(total_cash, 2),
+        "total_holdings_value": round(total_holdings, 2),
+        "account_count": len(accounts),
+        "accounts": books,
+        "combined_holdings": holdings,
+    }
+
+
+def find_overlap():
+    """The same stock held at MORE THAN ONE brokerage.
+
+    The number nobody can see. Each brokerage shows you its own slice, so a position
+    split across two accounts looks small twice and nobody shows you the real total.
+    That is a concentration risk you cannot detect from inside either account.
+    """
+    book = get_all_holdings()
+    doubled = [h for h in book["combined_holdings"] if h["held_in"] > 1]
+
+    return {
+        "net_worth": book["net_worth"],
+        "account_count": book["account_count"],
+        "overlapping": doubled,
+        "note": (
+            "No symbol is held in more than one account."
+            if not doubled
+            else (
+                f"{len(doubled)} symbol(s) are held at more than one brokerage. Neither "
+                f"brokerage can show the combined weight — each sees only its own slice. "
+                f"That is real, invisible concentration."
+            )
+        ),
+    }
+
+
+def search_symbols(query, account_id=None):
+    """Company name -> tickers. "dr pepper" -> KDP, DPS.
+
+    Not breadth — a correctness fix, and a safety one. Voice gives you company NAMES;
+    preview_trade needs a ticker. Without this the model guesses.
+
+    And the raw endpoint's ranking is dangerous. "nvidia" returns, in order:
+
+        NVD   GraniteShares 2x SHORT Nvidia ETF     <-- an INVERSE ETF
+        NVDW  Tadr 1.75x Long Nvidia Weekly ETF
+        ...   NVDA is not even in the top two
+
+    So "buy some Nvidia", naively resolved, shorts the thing you meant to buy at 2x
+    leverage. Ordinary shares are therefore ranked ahead of ETFs, and anything
+    leveraged or inverse is flagged rather than quietly offered.
+    """
+    account_id = account_id or _default_account_id()
+    want = query.strip()
+    results = _client.reference_data.symbol_search_user_account(
+        account_id=account_id, substring=want, **_USER
+    ).body
+
+    LEVERAGED = ("2x", "3x", "1.5x", "1.75x", "short", "inverse", "bear", "bull", "leveraged")
+
+    found = []
+    for r in results:
+        s = dict(r)
+        symbol = s.get("symbol") or ""
+        description = s.get("description") or ""
+        kind = (s.get("type") or {}).get("description") or ""
+        risky = any(w in description.lower() for w in LEVERAGED)
+
+        found.append(
+            {
+                "symbol": symbol,
+                "description": description,
+                "exchange": (s.get("exchange") or {}).get("code"),
+                "type": kind,
+                "currency": (s.get("currency") or {}).get("code"),
+                # Loud, because it's the difference between owning a company and
+                # betting against it with borrowed money.
+                **({"WARNING": "LEVERAGED OR INVERSE ETF — not the underlying company"}
+                   if risky else {}),
+            }
+        )
+
+    # SnapTrade's search is a raw substring match with NO relevance ranking. Searching
+    # "apple" returns, in order: Dr Pepper SNAPPLE, Maui Land & PINEAPPLE, a 2x
+    # leveraged natural-gas ETF... with AAPL buried 7th out of 17. So the ranking is
+    # done here, or "buy some Apple" buys pineapples.
+    def rank(item):
+        symbol = (item["symbol"] or "").upper()
+        description = (item["description"] or "").lower()
+        common = "Common Stock" in (item["type"] or "")
+        return (
+            symbol != want.upper(),               # an exact ticker match always wins
+            "WARNING" in item,                    # leveraged/inverse dead last
+            not (description.startswith(want.lower()) and common),  # "Apple Inc." > "Pineapple Energy"
+            not description.startswith(want.lower()),
+            not common,                           # real shares before ETFs
+            len(symbol),                          # AAPL before AAPL42 / AAPL26
+            # Then the plain company wins: "Apple Inc." is shorter than "Apple
+            # Hospitality REIT, Inc.", and "Keurig Dr Pepper Inc." is shorter than
+            # "Dr Pepper Snapple Group, Inc Dr Pepper Snapple Group, Inc".
+            len(description),
+        )
+
+    return sorted(found, key=rank)[:8]
+
+
+def get_connection_health():
+    """Are the brokerage links healthy, and how stale is the data?
+
+    Brokerage connections break and data goes stale — SnapTrade's real, unglamorous
+    pain point, and the reason a unification layer needs to be watched, not trusted.
+    """
+    out = []
+    for conn in _client.connections.list_brokerage_authorizations(**_USER).body:
+        conn = dict(conn)
+        updated = conn.get("updated_date")
+        stale_hours = None
+        if updated:
+            try:
+                then = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+                stale_hours = round(
+                    (datetime.now(timezone.utc) - then).total_seconds() / 3600, 1
+                )
+            except ValueError:
+                pass
+        out.append(
+            {
+                "connection_id": conn.get("id"),
+                "brokerage": (conn.get("brokerage") or {}).get("name"),
+                "disabled": conn.get("disabled"),
+                "disabled_since": conn.get("disabled_date"),
+                "type": conn.get("type"),
+                "last_synced": updated,
+                "hours_since_sync": stale_hours,
+                "stale": bool(stale_hours and stale_hours > 24),
+            }
+        )
+    return out
+
+
+def refresh_connection(connection_id):
+    """Force a re-sync with the brokerage. A MUTATION — gated in trading.py."""
+    _client.connections.refresh_brokerage_authorization(
+        authorization_id=connection_id, **_USER
+    )
+    return {"connection_id": connection_id, "refreshed": True}
+
+
+ACTIVITY_TYPES = ("BUY", "SELL", "DIVIDEND", "FEE", "CONTRIBUTION", "WITHDRAWAL", "INTEREST")
+
+
+def get_activities(days=90, account_id=None):
+    """Trades, dividends, fees — what actually happened in the account.
+
+    Paginated: the endpoint returns {data, pagination}, so page until it runs dry.
+    """
+    account_id = account_id or _default_account_id()
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+
+    rows, offset = [], 0
+    while True:
+        body = dict(
+            _client.account_information.get_account_activities(
+                account_id=account_id, start_date=start, offset=offset, limit=200, **_USER
+            ).body
+        )
+        page = body.get("data") or []
+        for a in page:
+            a = dict(a)
+            rows.append(
+                {
+                    "type": a.get("type"),
+                    "symbol": ((a.get("symbol") or {}).get("symbol")),
+                    "description": a.get("description"),
+                    "units": _num(a.get("units")),
+                    "price": _num(a.get("price")),
+                    "amount": _num(a.get("amount")),
+                    "currency": (a.get("currency") or {}).get("code"),
+                    "date": a.get("trade_date") or a.get("settlement_date"),
+                }
+            )
+        pagination = body.get("pagination") or {}
+        offset += len(page)
+        if not page or offset >= (pagination.get("total") or 0):
+            break
+
+    totals = {}
+    for r in rows:
+        kind = (r["type"] or "OTHER").upper()
+        totals[kind] = round(totals.get(kind, 0) + (r["amount"] or 0), 2)
+
+    return {"since": str(start), "count": len(rows), "totals_by_type": totals, "activities": rows}
+
+
+def get_balance_history(account_id=None):
+    """Portfolio value over time, so performance can be computed rather than guessed."""
+    account_id = account_id or _default_account_id()
+    body = dict(
+        _client.account_information.get_account_balance_history(
+            account_id=account_id, **_USER
+        ).body
+    )
+
+    # Newest first from the API, and zeros before the account existed — those aren't
+    # a 100% drawdown, they're the absence of an account. Dropping them is the
+    # difference between "you're flat" and "you lost everything".
+    points = [
+        {"date": str(dict(p).get("date")), "value": _num(dict(p).get("total_value"))}
+        for p in (body.get("history") or [])
+    ]
+    points = [p for p in points if p["value"]]
+    points.sort(key=lambda p: p["date"])
+
+    if len(points) < 2:
+        return {
+            "points": points,
+            "note": (
+                "Not enough history to compute a return — this account has only been "
+                "connected for a day or so. Say that plainly rather than quoting a "
+                "meaningless number."
+            ),
+        }
+
+    first, last = points[0], points[-1]
+    change = last["value"] - first["value"]
+    return {
+        "points": points,
+        "from": first["date"],
+        "to": last["date"],
+        "start_value": first["value"],
+        "end_value": last["value"],
+        "change": round(change, 2),
+        "return_pct": round(100 * change / first["value"], 2) if first["value"] else None,
+    }
 
 
 def list_connections():

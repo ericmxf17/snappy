@@ -128,6 +128,98 @@ TOOLS.append(
 
 TOOLS.append(
     {
+        "name": "get_all_holdings",
+        "description": (
+            "Everything the user owns across EVERY connected brokerage, with true "
+            "combined weights and total net worth. Use for 'what am I worth in total', "
+            "'what do I own everywhere', 'my whole portfolio'. This is the cross-brokerage "
+            "view no single brokerage can give you."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "find_overlap",
+        "description": (
+            "The same stock held at MORE THAN ONE brokerage. Use for 'am I doubled up', "
+            "'do I own the same thing twice', 'am I more concentrated than I think'. "
+            "Each brokerage only shows its own slice, so a position split across two "
+            "accounts looks small in both and nobody shows the real total. That hidden "
+            "concentration is the point of this tool."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "get_connection_health",
+        "description": (
+            "Are the brokerage connections healthy, and how stale is the data? Use for "
+            "'is my data fresh', 'when did Alpaca last sync', 'is my connection broken'. "
+            "Reports hours since last sync and whether a link is disabled."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "get_activities",
+        "description": (
+            "What actually HAPPENED in the account: trades, dividends, fees, interest. "
+            "Use for 'what dividends have I received', 'how much have I paid in fees', "
+            "'what did I trade last week', 'show me my history'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "How far back to look. Default 90."}
+            },
+            "required": [],
+        },
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "get_balance_history",
+        "description": (
+            "Portfolio value over time, and the return computed from it. Use for 'how am I "
+            "doing', 'how has my portfolio performed', 'am I up or down'. To compare against "
+            "a benchmark, get the S&P's return over the SAME dates with web_search. If the "
+            "tool says there isn't enough history, say so — do not invent a return."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    }
+)
+
+TOOLS.append(
+    {
+        "name": "search_symbols",
+        "description": (
+            "Look up a ticker by company name. You already know the tickers for household "
+            "names (Apple is AAPL, Coca-Cola is KO) — do NOT use this for those. Use it when "
+            "you are genuinely unsure, when a name is ambiguous, or to check a symbol exists "
+            "before trading it. Results may include LEVERAGED or INVERSE ETFs that merely "
+            "mention the company: those carry a WARNING field, and picking one would bet "
+            "AGAINST the company the user asked to buy. Never choose one. If two real "
+            "companies match, ask which they meant."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Company name or partial ticker."}
+            },
+            "required": ["query"],
+        },
+    }
+)
+
+TOOLS.append(
+    {
         "name": "preview_cancel",
         "description": (
             "PROPOSE cancelling an open order. This does NOT cancel it — the user must "
@@ -241,6 +333,12 @@ DISPATCH = {
     "list_connections": st.list_connections,
     "list_supported_brokerages": st.list_supported_brokerages,
     "get_orders": st.get_orders,
+    "get_all_holdings": st.get_all_holdings,
+    "find_overlap": st.find_overlap,
+    "get_connection_health": st.get_connection_health,
+    "get_activities": st.get_activities,
+    "get_balance_history": st.get_balance_history,
+    "search_symbols": st.search_symbols,
     # NOTE: there is deliberately NO "place_trade" and no "cancel_order" here.
     # Execution and cancellation live in trading.py, called by main.py after the
     # user confirms — never by the model. See trading.py's header for why.

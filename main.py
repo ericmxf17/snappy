@@ -102,7 +102,12 @@ def describe_fill(filled):
 
         units = filled.get("units")
         parts.append(f"{units:g} shares of" if isinstance(units, (int, float)) else "shares of")
-        parts.append(str(filled.get("symbol") or "the symbol"))
+        symbol = str(filled.get("symbol") or "the symbol")
+        # Name the company, not just the ticker. SnapTrade's symbol search ranks
+        # "Apple Hospitality REIT" above "Apple Inc.", so a wrong ticker is a live
+        # possibility — and "AZQ (Amazon.com CDR)" looks wrong in a way "AZQ" doesn't.
+        company = filled.get("description")
+        parts.append(f"{symbol} ({company})" if company and company != symbol else symbol)
 
         price = filled.get("price")
         if isinstance(price, (int, float)):
