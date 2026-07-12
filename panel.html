@@ -197,6 +197,9 @@
          user-select: text; -webkit-user-select: text; cursor: text; }
   #ask::placeholder { color: var(--faint); }
   #send { flex: none; font: 11px ui-monospace, Menlo, monospace; color: var(--faint); }
+
+  .disclaimer { flex: none; text-align: center; font-size: 9px; letter-spacing: .04em;
+                color: var(--faint); opacity: .7; margin-top: 7px; }
 </style>
 </head>
 
@@ -231,6 +234,9 @@
       <input id="ask" placeholder="Ask Snappy…" autocomplete="off" spellcheck="false">
       <span id="send">↵</span>
     </div>
+    <!-- Snappy now writes analyst-grade commentary on real positions. That is
+         analysis, not advice, and the difference should be on the face of it. -->
+    <div class="disclaimer">Analysis, not financial advice.</div>
   </div>
 
 <script>

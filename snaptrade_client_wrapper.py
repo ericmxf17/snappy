@@ -149,6 +149,16 @@ def get_portfolio_summary(account_id=None):
 
     positions.sort(key=lambda p: p["market_value"], reverse=True)
 
+    # Cost basis and open P&L come back from the brokerage and are what let Snappy
+    # say "you're up 18% on this" instead of only "this is 12% of your portfolio".
+    for p in positions:
+        basis = p.get("average_purchase_price")
+        if basis and p.get("units"):
+            cost = basis * p["units"]
+            p["cost_basis"] = round(cost, 2)
+            p["unrealized_pnl"] = round(p["market_value"] - cost, 2)
+            p["unrealized_pct"] = round(100 * (p["market_value"] - cost) / cost, 2) if cost else None
+
     summary = {
         "total_portfolio_value": round(total, 2),
         "cash": round(cash, 2),
@@ -157,6 +167,30 @@ def get_portfolio_summary(account_id=None):
         "buying_power": usd.get("buying_power"),
         "positions": positions,
     }
+
+    # Pending orders are money already committed. A portfolio read that ignores them
+    # is wrong about what the user will actually own tomorrow morning — and sizing a
+    # new position against a stale cash figure double-spends it.
+    try:
+        pending = get_orders(open_only=True, account_id=account_id)
+    except Exception:
+        pending = []
+    if pending:
+        committed = sum(
+            (o["units"] or 0) * (o["execution_price"] or 0)
+            for o in pending
+            if o["action"] == "BUY"
+        )
+        summary["pending_orders"] = pending
+        summary["pending_note"] = (
+            f"{len(pending)} order(s) are still open and have NOT filled. They are not in "
+            f"the positions above. Factor them in when sizing anything new — the cash they "
+            f"will consume is still counted as available here."
+        )
+        if committed:
+            summary["cash_after_pending_fill"] = round(cash - committed, 2)
+
+    return summary
     if unpriced:
         summary["warning"] = (
             f"No live price for {', '.join(unpriced)}, so they are counted as $0. "
