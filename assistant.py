@@ -99,6 +99,52 @@ that is real data, not something to search for.
 _SYSTEM = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 
+class _Spend:
+    """What the last question actually cost.
+
+    Sonnet 5 intro pricing, per million tokens. Cache WRITES cost 1.25x base and
+    cache READS cost 0.1x — which is the entire point of the breakpoint below.
+    """
+
+    IN, OUT, WRITE, READ = 2.0, 10.0, 2.50, 0.20
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.fresh = self.out = self.written = self.read = 0
+
+    def add(self, usage):
+        self.fresh += usage.input_tokens
+        self.out += usage.output_tokens
+        self.written += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self.read += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+    @property
+    def dollars(self):
+        return (
+            self.fresh * self.IN
+            + self.out * self.OUT
+            + self.written * self.WRITE
+            + self.read * self.READ
+        ) / 1e6
+
+    def __str__(self):
+        return (
+            f"${self.dollars:.4f}  "
+            f"(in {self.fresh:,} · out {self.out:,} · "
+            f"cache write {self.written:,} · cache read {self.read:,})"
+        )
+
+
+_spend = _Spend()
+
+
+def last_cost():
+    """Dollars spent on the most recent question."""
+    return _spend.dollars
+
+
 def _sources_from(content):
     """Pull the web pages Claude actually read out of the search result blocks."""
     found = []
@@ -110,6 +156,35 @@ def _sources_from(content):
             if url:
                 found.append({"url": url, "title": getattr(result, "title", "") or url})
     return found
+
+
+def _move_cache_breakpoint(messages):
+    """Cache the conversation so far, not just the system prompt.
+
+    A web search injects 30-100k tokens of results into the conversation. Every
+    LATER turn — get_portfolio_summary, get_quote, preview_trade, the final answer —
+    re-sends that entire history, and without a breakpoint it is re-billed at FULL
+    price each time. A four-turn research question pays for the same search results
+    four times over.
+
+    Marking the last tool_result block caches everything before it, so the next turn
+    reads the history at 10% of input price instead of 100%.
+
+    The old breakpoint is removed first: the API allows at most 4, and a long
+    tool-use loop would otherwise run straight past that limit.
+    """
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+
+    content = messages[-1].get("content")
+    # Only our own tool_result messages are plain dicts; assistant turns come back
+    # as SDK block objects and can't carry a breakpoint.
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1]["cache_control"] = {"type": "ephemeral"}
 
 
 def _stream_turn(messages, container, on_text):
@@ -153,6 +228,7 @@ def answer(transcript: str, on_text=None, on_reset=None) -> str:
     messages = [{"role": "user", "content": transcript}]
     container = None
     turn_text = []
+    _spend.reset()
 
     for _ in range(MAX_TURNS):
         turn_started = time.perf_counter()
@@ -165,6 +241,7 @@ def answer(transcript: str, on_text=None, on_reset=None) -> str:
                 on_text(chunk)
 
         response, container = _stream_turn(messages, container, collect)
+        _spend.add(response.usage)
 
         # Server-side searches already ran; surface them in the trace and sources.
         for block in response.content:
@@ -215,6 +292,9 @@ def answer(transcript: str, on_text=None, on_reset=None) -> str:
                 ],
             }
         )
+        # Everything up to here — including any search results — gets read from
+        # cache on the next turn instead of re-billed in full.
+        _move_cache_breakpoint(messages)
 
     return "".join(turn_text).strip() or "Sorry, I didn't catch that."
 
@@ -243,3 +323,4 @@ if __name__ == "__main__":
     if state.STATE["sources"]:
         print("SOURCES:", [s["url"] for s in state.STATE["sources"]][:5])
     print(f"TOOK  : {time.perf_counter() - started:.1f}s")
+    print(f"COST  : {_spend}")
