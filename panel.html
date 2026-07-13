@@ -132,10 +132,38 @@
   }
   .trig { font-size: 11px; color: var(--faint); margin-top: 5px; }
 
+  /* ---- tabs --------------------------------------------------------------
+     The conversation and the portfolio are different things and were sharing one
+     scroll: ask three questions and your holdings are a screen and a half below the
+     fold. They get their own panes.
+
+     Anything ACTIONABLE — a confirm card, an account picker — is pinned above the tabs
+     and shows on both. A trade you have to approve must never be one click away behind
+     a tab you aren't looking at. */
+  .tabs { display: flex; gap: 2px; flex: none; padding: 2px;
+          background: rgba(255,255,255,.04); border-radius: 8px; }
+  .tabs button {
+    flex: 1; background: none; border: 0; cursor: pointer; color: var(--faint);
+    font: 600 10px/1 "SF Pro Text", -apple-system, sans-serif;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 7px 0; border-radius: 6px; transition: background .12s, color .12s;
+  }
+  .tabs button:hover { color: var(--dim); }
+  .tabs button[aria-selected="true"] { background: rgba(255,255,255,.08); color: var(--text); }
+  .tabs button:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
+
+  /* Pinned: always on screen, whichever tab is showing. */
+  #pinned { flex: none; display: flex; flex-direction: column; gap: 9px; }
+  #pinned:empty { display: none; }
+
   /* ---- scrolling body -------------------------------------------------- */
   #feed { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 9px;
           margin: 0 -4px; padding: 0 4px; }
   #feed::-webkit-scrollbar { width: 0; }
+  #feed:empty::after {
+    content: attr(data-empty); display: block; text-align: center;
+    color: var(--faint); font-size: 11px; padding: 22px 0;
+  }
 
   .card { background: var(--card); border: 1px solid var(--line);
           border-radius: 11px; padding: 11px 12px; }
@@ -335,6 +363,13 @@
       menubar icon and choose <b>Ask Snappy</b>.
     </div>
 
+    <div id="pinned"></div>
+
+    <div class="tabs" role="tablist">
+      <button id="tabAsk" role="tab" aria-selected="true">Ask</button>
+      <button id="tabPortfolio" role="tab" aria-selected="false">Portfolio</button>
+    </div>
+
     <div id="feed"></div>
 
     <div id="composer">
@@ -519,6 +554,26 @@
   const seen = new Map();
   let firstPaint = true;
 
+  // Which pane is showing. Lives here, not in Python — switching tabs is not a thing
+  // the backend needs to know about, and a round-trip would make it feel sticky.
+  let tab = 'ask';
+  let lastQuestion = null;
+  let lastState = null;   // so a tab click can re-render without waiting for a push
+
+  const syncTabs = () => {
+    document.getElementById('tabAsk').setAttribute('aria-selected', tab === 'ask');
+    document.getElementById('tabPortfolio').setAttribute('aria-selected', tab === 'portfolio');
+  };
+
+  const showTab = (which) => {
+    if (tab === which) return;
+    tab = which;
+    if (lastState) setState(lastState);   // re-render the pane, with the state we have
+  };
+
+  document.getElementById('tabAsk').onclick = () => showTab('ask');
+  document.getElementById('tabPortfolio').onclick = () => showTab('portfolio');
+
   const markMoves = (root) => {
     const changed = [];
     for (const el of root.querySelectorAll('[data-k]')) {
@@ -588,6 +643,7 @@
   setInterval(drawFresh, 1000);
 
   window.setState = (s) => {
+    lastState = s;
     document.body.dataset.status = s.status;
     document.body.dataset.hotkey = s.hotkey_ok === false ? 'off' : 'on';
     document.getElementById('statusText').textContent = {
@@ -623,48 +679,68 @@
     }
     drawFresh();
 
-    const feed = document.getElementById('feed');
+    // PINNED — actionable, and shown on both tabs. A trade waiting for your approval
+    // must never be hidden behind a tab you aren't looking at.
+    const pinned = [];
+    if (s.notice) pinned.push(`<div class="notice">${esc(s.notice)}</div>`);
+    if (s.choose) pinned.push(chooseHTML(s.choose));
+    if (s.pending) pinned.push(tradeHTML(s.pending, s.total_value));
+    document.getElementById('pinned').innerHTML = pinned.join('');
+
+    // A new question pulls you back to Ask — you asked it, you want to see it. But
+    // only on a NEW one: yanking the tab out from under someone browsing their
+    // holdings, every time a background refresh landed, would be maddening.
     const live = s.question || s.answer;
+    if (s.question && s.question !== lastQuestion) {
+      lastQuestion = s.question;
+      tab = 'ask';
+    }
+    syncTabs();
+
+    const feed = document.getElementById('feed');
     const parts = [];
 
-    if (s.notice) parts.push(`<div class="notice">${esc(s.notice)}</div>`);
-    if (s.choose) parts.push(chooseHTML(s.choose));
-    if (s.pending) parts.push(tradeHTML(s.pending, s.total_value));
-    if (live) parts.push(turnHTML(s, s.status === 'thinking'));
-    for (const h of s.history) parts.push(turnHTML(h, false));
+    if (tab === 'ask') {
+      feed.dataset.empty = 'Hold ⌥ and ask. Or type below.';
+      if (live) parts.push(turnHTML(s, s.status === 'thinking'));
+      for (const h of s.history) parts.push(turnHTML(h, false));
 
-    if (s.positions.length) {
-      // held_in > 1 is the number no single brokerage can show you: the same stock,
-      // split across accounts, looking small twice.
-      parts.push(`<div class="card">
-        <div class="hd">Holdings · all accounts</div>
-        <table>${s.positions.map(p => `<tr>
-          <td class="sym">${esc(p.symbol)}${
-            p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}</td>
-          <td class="num wt">${p.units}</td>
-          <td class="num" data-k="mv:${esc(p.symbol)}" data-v="${p.market_value}">${money(p.market_value)}</td>
-          <td class="num wt" data-k="wt:${esc(p.symbol)}" data-v="${p.weight_pct}">${p.weight_pct}%</td>
-        </tr>`).join('')}</table>
-      </div>`);
-    }
+      if (!parts.length) {
+        parts.push(`<div class="card hint">
+          <span class="opt">Hold <kbd>⌥</kbd>, speak, let go.</span> Or type below.<br>
+          <span style="opacity:.7">Clicking the icon just shows this panel.</span><br>
+          <kbd>What's my balance?</kbd> <kbd>Do I own NVDA anywhere?</kbd><br>
+          <kbd>How would 5 shares of SpaceX fit?</kbd><br>
+          <kbd>Buy one share of Micron</kbd>
+        </div>`);
+      }
+    } else {
+      // PORTFOLIO — always here, however long the conversation gets. This is the whole
+      // point of the split: your holdings used to sink below a screen and a half of
+      // trade confirmations.
+      feed.dataset.empty = 'No holdings yet.';
 
-    // Where the money actually is. Only worth showing when there's more than one
-    // account — with one, it's just the holdings table again with extra clicks.
-    if ((s.accounts || []).length > 1) {
-      parts.push(`<div class="card">
-        <div class="hd">Accounts</div>
-        ${s.accounts.map(accountRowHTML).join('')}
-      </div>`);
-    }
+      if ((s.accounts || []).length > 1) {
+        parts.push(`<div class="card">
+          <div class="hd">Accounts</div>
+          ${s.accounts.map(accountRowHTML).join('')}
+        </div>`);
+      }
 
-    if (!parts.length) {
-      parts.push(`<div class="card hint">
-        <span class="opt">Hold <kbd>⌥</kbd>, speak, let go.</span> Or type below.<br>
-        <span style="opacity:.7">Clicking the icon just shows this panel.</span><br>
-        <kbd>What's my balance?</kbd> <kbd>Do I own Apple?</kbd><br>
-        <kbd>How would 5 shares of SpaceX fit?</kbd><br>
-        <kbd>Which brokerages am I connected to?</kbd>
-      </div>`);
+      if (s.positions.length) {
+        // held_in > 1 is the number no single brokerage can show you: the same stock,
+        // split across accounts, looking small twice.
+        parts.push(`<div class="card">
+          <div class="hd">Holdings · all accounts</div>
+          <table>${s.positions.map(p => `<tr>
+            <td class="sym">${esc(p.symbol)}${
+              p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}</td>
+            <td class="num wt">${p.units}</td>
+            <td class="num" data-k="mv:${esc(p.symbol)}" data-v="${p.market_value}">${money(p.market_value)}</td>
+            <td class="num wt" data-k="wt:${esc(p.symbol)}" data-v="${p.weight_pct}">${p.weight_pct}%</td>
+          </tr>`).join('')}</table>
+        </div>`);
+      }
     }
 
     feed.innerHTML = parts.join('');
