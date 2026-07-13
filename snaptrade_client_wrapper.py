@@ -217,27 +217,61 @@ def get_account_balance(account_id=None):
 
 @_cached(20)
 def get_positions(account_id=None):
-    """Current equity holdings for one account."""
+    """Current equity holdings for one account.
+
+    SnapTrade returns TWO different shapes for this endpoint, and reading only one of
+    them cost us most of a morning:
+
+        current : {"results": [{"instrument": {"symbol": ...}, "units": "21", ...}]}
+        legacy  : {"positions": [{"symbol": {"symbol": {...}}, "units": 21, ...}]}
+                  (or a bare list)
+
+    We parsed only the legacy shape. The current one has the list under "results", the
+    ticker under "instrument", and the numbers as decimal STRINGS. So this returned []
+    — and an empty list is indistinguishable from an empty account. Every position was
+    invisible, every weight was zero, find_overlap found no overlap, and it all looked
+    exactly like a SnapTrade sync lag. It wasn't. It was this function.
+
+    An empty result is the most dangerous thing a parser can return: it fails as a
+    plausible fact rather than as an error.
+    """
     account_id = account_id or _default_account_id()
     result = _client.account_information.get_all_account_positions(
         account_id=account_id, **_USER
     ).body
 
-    # The endpoint returns either a bare list of positions or an object with a
-    # "positions" key depending on the brokerage, so normalize both shapes.
-    raw = result.get("positions", []) if isinstance(result, dict) else result
+    if isinstance(result, dict):
+        raw = result.get("results") or result.get("positions") or []
+    else:
+        raw = result
 
     positions = []
     for p in raw:
-        symbol = (p.get("symbol") or {}).get("symbol") or {}
+        instrument = p.get("instrument")
+        if instrument:                                   # current shape
+            ticker = instrument.get("symbol")
+            description = instrument.get("description")
+            basis = _num(p.get("cost_basis"))
+        else:                                            # legacy shape
+            symbol = (p.get("symbol") or {}).get("symbol") or {}
+            ticker = symbol.get("symbol")
+            description = symbol.get("description")
+            basis = _num(p.get("average_purchase_price"))
+
+        units = _num(p.get("units"))
+        price = _num(p.get("price"))
+        pnl = p.get("open_pnl")
+        if pnl is None and None not in (units, price, basis):
+            pnl = round((price - basis) * units, 2)
+
         positions.append(
             {
-                "symbol": symbol.get("symbol"),
-                "description": symbol.get("description"),
-                "units": p.get("units"),
-                "price": p.get("price"),
-                "average_purchase_price": p.get("average_purchase_price"),
-                "open_pnl": p.get("open_pnl"),
+                "symbol": ticker,
+                "description": description,
+                "units": units,
+                "price": price,
+                "average_purchase_price": basis,
+                "open_pnl": _num(pnl),
             }
         )
     return positions
@@ -281,10 +315,16 @@ _SETTLED = ("EXECUTED", "FILLED", "COMPLETE", "COMPLETED")
 def unsynced_fills(account_id=None):
     """Shares the brokerage says are FILLED that SnapTrade's positions don't show yet.
 
-    SnapTrade can report an order EXECUTED — with a fill quantity and an execution
-    price — while get_all_account_positions still returns an empty account. Two
-    endpoints, same account, contradicting each other. An app that trusts positions
-    alone tells the user they own nothing, which is simply false.
+    A brokerage can report an order EXECUTED before the holdings sync that would put it
+    in positions has run, so the two endpoints briefly disagree. An app that trusts
+    positions alone tells the user they own nothing, which is simply false.
+
+    (This was written while chasing what LOOKED like exactly that — seven filled orders
+    and an empty positions list. The real cause turned out to be our own parser reading
+    the wrong payload shape; see get_positions. The check is still worth having, because
+    a genuine sync gap does occur and looks identical. But note how it looked: an empty
+    list is indistinguishable from an empty account, so a parsing bug can masquerade as a
+    platform bug indefinitely. Suspect your own code first.)
 
     Only counts a symbol as missing when the FILLS EXCEED the position. The orders
     endpoint may not reach back far enough to explain an old holding, so a position

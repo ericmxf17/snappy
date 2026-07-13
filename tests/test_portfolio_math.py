@@ -190,3 +190,77 @@ def test_a_sold_position_does_not_look_unsynced(monkeypatch):
     sold = {**FILLED_NVDA, "order_id": "o2", "action": "SELL"}
     st = _stub(monkeypatch, positions=[], orders=[FILLED_NVDA, sold])
     assert st.unsynced_fills("acct-1") == []
+
+
+# --- the parser that silently emptied the portfolio -------------------------
+
+CURRENT_SHAPE = {
+    "results": [
+        {
+            "instrument": {"kind": "stock", "symbol": "AAPL", "description": "Apple Inc.",
+                           "currency": "USD", "exchange": "XNAS"},
+            "units": "21", "price": "319.85", "cost_basis": "319.59", "currency": "USD",
+        }
+    ]
+}
+
+LEGACY_SHAPE = {
+    "positions": [
+        {
+            "symbol": {"symbol": {"symbol": "AAPL", "description": "Apple Inc."}},
+            "units": 21, "price": 319.85, "average_purchase_price": 319.59, "open_pnl": 5.46,
+        }
+    ]
+}
+
+
+def _sdk(monkeypatch, payload):
+    """Point the wrapper's SDK client at a canned positions payload."""
+    import snaptrade_client_wrapper as st
+    from conftest import Body
+
+    class Accounts:
+        def get_all_account_positions(self, **kw):
+            return Body(payload)
+
+    class Client:
+        account_information = Accounts()
+
+    monkeypatch.setattr(st, "_client", Client())
+    monkeypatch.setattr(st, "_default_account_id", lambda: "acct-1")
+    return st
+
+
+def test_positions_parse_the_shape_snaptrade_actually_returns(monkeypatch):
+    """The list is under "results", the ticker under "instrument", numbers are STRINGS.
+
+    We parsed only the legacy shape, so this returned [] — and an empty list is
+    indistinguishable from an empty account. Every position went invisible, every
+    weight went to zero, find_overlap reported no overlap while NVDA sat in two
+    accounts, and it all looked exactly like a SnapTrade sync lag. It was this parser.
+
+    An empty result is the most dangerous thing a parser can return: it fails as a
+    plausible fact rather than as an error.
+    """
+    st = _sdk(monkeypatch, CURRENT_SHAPE)
+    positions = st.get_positions("acct-1")
+
+    assert len(positions) == 1, "the current payload shape must not parse to nothing"
+    p = positions[0]
+    assert p["symbol"] == "AAPL"
+    assert p["description"] == "Apple Inc."
+    assert p["units"] == 21.0, "decimal strings must become numbers"
+    assert p["price"] == 319.85
+    assert p["average_purchase_price"] == 319.59
+    assert p["open_pnl"] == round((319.85 - 319.59) * 21, 2)
+
+
+def test_the_legacy_shape_still_parses(monkeypatch):
+    """Other brokerages may still send the old shape. Don't fix one by breaking the other."""
+    st = _sdk(monkeypatch, LEGACY_SHAPE)
+    positions = st.get_positions("acct-1")
+
+    assert len(positions) == 1
+    assert positions[0]["symbol"] == "AAPL"
+    assert positions[0]["units"] == 21.0
+    assert positions[0]["average_purchase_price"] == 319.59
