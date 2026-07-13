@@ -1,13 +1,15 @@
-<img src="assets/icon.png" width="120" alt="Snappy">
+<img src="assets/banner.png" alt="Snappy — talk to your brokerage accounts">
 
-# Snappy
+Snappy is a macOS menubar app. Hold ⌥, ask a question out loud, let go — the answer is written
+into a floating panel, drawn from live data across **every** brokerage you've connected through
+[SnapTrade](https://snaptrade.com), plus the open web when the question needs it.
 
-**Talk to your brokerage accounts.** Hold ⌥, ask a question, let go. The answer is written into
-a floating panel — using live data from every brokerage you've connected through
-[SnapTrade](https://snaptrade.com), and the open web when the question needs it.
+Your brokerage can only ever show you its own slice. Snappy can see all of them at once, which
+is the point: *"NVDA is split across two accounts — 49 shares, $9,983, 6.7% of your net worth."*
+No single broker will ever tell you that.
 
 It can also place trades. Only paper accounts, only after you confirm, and the model that reads
-the web is structurally incapable of executing anything. More on that below, because it's the
+the web is **structurally incapable of executing anything**. More on that below, because it's the
 part worth reading.
 
 ---
