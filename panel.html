@@ -180,6 +180,11 @@
   .trade .go { background: var(--amber); color: #14110B; }
   .trade .no { background: rgba(255,255,255,.10); color: var(--text); }
   .trade .say { text-align: center; font-size: 11px; color: var(--faint); margin-top: 8px; }
+  /* WHICH account. With several accounts the ticker and the size no longer describe
+     the order — the destination is part of what the user is agreeing to, so it is
+     printed in the same amber as the action, not buried in grey. */
+  .trade .acct { font-size: 11px; color: var(--amber); margin-top: 6px;
+                 letter-spacing: .04em; text-transform: uppercase; }
 
   /* One confirmation for a whole batch widens the blast radius, so the batch has
      to be visible. A list you can't see is a list you can't refuse. */
@@ -343,12 +348,18 @@
           <span class="bst">${esc(o.status)}</span>
         </div>`).join('')}
       </div>
+      ${acctHTML(t)}
       <div class="row2">
         <button class="go" id="btnGo">Confirm</button>
         <button class="no" id="btnNo">Dismiss</button>
       </div>
       <div class="say">or just say “confirm”</div>
     </div>`;
+
+  // Which account this lands in. Shown on every confirmation card: with more than one
+  // account, "BUY 5 NVDA" is an incomplete description of what is about to happen.
+  const acctHTML = (t) =>
+    t.account_label ? `<div class="acct">→ ${esc(t.account_label)}</div>` : '';
 
   const tradeHTML = (t, total) => {
     if (t.kind === 'cancel_all') return batchHTML(t);
@@ -369,6 +380,7 @@
              ${pct != null ? `${pct.toFixed(2)}% of your portfolio` : ''}
              ${t.price != null ? ` · at ${money(t.price)}/share` : ''}
            </div>`}
+      ${acctHTML(t)}
       <div class="row2">
         <button class="go" id="btnGo">Confirm</button>
         <button class="no" id="btnNo">Dismiss</button>

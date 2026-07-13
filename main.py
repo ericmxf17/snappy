@@ -115,6 +115,12 @@ def describe_fill(filled):
         elif isinstance(filled.get("estimated_cost"), (int, float)):
             parts.append(f"for about ${filled['estimated_cost']:,.2f}")
 
+        # Say WHERE it went. With several accounts, "Bought 5 NVDA" leaves out the one
+        # detail the user needs to notice a mistake.
+        account = filled.get("account_label")
+        if account:
+            parts.append(f"in {account}")
+
         line = " ".join(parts) + "."
         if settled:
             return line

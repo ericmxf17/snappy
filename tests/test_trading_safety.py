@@ -32,8 +32,31 @@ def clean():
     trading.cancel()
 
 
+def accounts_for(connections):
+    """One account per connection, the way SnapTrade actually reports them.
+
+    is_paper is the brokerage's own flag, so the Robinhood fixture is a real-money
+    account and the paper ones are not — which is what the guards now interrogate.
+    """
+    return [
+        {
+            "account_id": f"acct-{i}",
+            "name": c["brokerage"],
+            "number": f"PA00000{i}",
+            "institution": c["brokerage"],
+            "connection_id": c["connection_id"],
+            "is_paper": "paper" in c["brokerage"].lower(),
+            "label": f"{c['brokerage']} ...000{i}",
+            "ordinal": i,
+            "total_value": 100_000,
+        }
+        for i, c in enumerate(connections, start=1)
+    ]
+
+
 def wire(monkeypatch, connections, *, price=300.0, trade_id="trade-1"):
     monkeypatch.setattr(st, "list_connections", lambda: connections)
+    monkeypatch.setattr(st, "list_accounts", lambda: accounts_for(connections))
     monkeypatch.setattr(config, "ALLOW_LIVE_TRADING", False)
     monkeypatch.setattr(config, "MAX_ORDER_USD", 10_000)
 
@@ -281,9 +304,9 @@ def test_cancel_all_proposes_but_cancels_nothing(monkeypatch):
         {"order_id": "o1", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
         {"order_id": "o2", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
     ]
-    monkeypatch.setattr(st, "get_orders", lambda open_only=False: open_orders)
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False, account_id=None: open_orders)
     killed = []
-    monkeypatch.setattr(st, "cancel_order", lambda oid: killed.append(oid))
+    monkeypatch.setattr(st, "cancel_order", lambda oid, account_id=None: killed.append(oid))
 
     proposal = trading.propose_cancel_all()
 
@@ -297,12 +320,12 @@ def test_cancel_all_proposes_but_cancels_nothing(monkeypatch):
 
 def test_cancel_all_by_symbol_only_touches_that_symbol(monkeypatch):
     wire(monkeypatch, [PAPER])
-    monkeypatch.setattr(st, "get_orders", lambda open_only=False: [
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False, account_id=None: [
         {"order_id": "o1", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
         {"order_id": "o2", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
     ])
     killed = []
-    monkeypatch.setattr(st, "cancel_order", lambda oid: killed.append(oid))
+    monkeypatch.setattr(st, "cancel_order", lambda oid, account_id=None: killed.append(oid))
 
     trading.propose_cancel_all("aapl")
     trading.confirm()
@@ -314,12 +337,12 @@ def test_one_failed_cancel_does_not_abandon_the_batch(monkeypatch):
     """An order can fill in the gap between proposing and confirming. That's a
     reason to report it, not to give up on the rest."""
     wire(monkeypatch, [PAPER])
-    monkeypatch.setattr(st, "get_orders", lambda open_only=False: [
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False, account_id=None: [
         {"order_id": "gone", "symbol": "AAPL", "action": "BUY", "units": 5.0, "status": "PENDING"},
         {"order_id": "ok", "symbol": "NVDA", "action": "BUY", "units": 10.0, "status": "PENDING"},
     ])
 
-    def flaky(oid):
+    def flaky(oid, account_id=None):
         if oid == "gone":
             raise RuntimeError("order already filled")
 
@@ -476,3 +499,87 @@ def test_typing_a_question_while_an_order_waits_still_reaches_claude(monkeypatch
     assert trading.pending() is not None, "the order must survive an unrelated question"
 
     trading.cancel()
+
+
+# --- account targeting: the order must land where the user said -------------
+
+def test_a_paper_account_elsewhere_does_not_authorise_a_real_one(monkeypatch):
+    """THE fail-open that multi-account trading introduces.
+
+    The old guard asked "does a healthy paper connection exist?" — a question about
+    the WORLD, not about the order. With a paper account and a real one both
+    connected, that question answers "yes" while the shares go into the real account.
+    The guard has to interrogate the account the money is actually going to.
+    """
+    wire(monkeypatch, [PAPER, LIVE])
+
+    trading.propose("BUY", "AAPL", 5, account="acct-1")     # the paper one — fine
+    assert trading.pending()["account_id"] == "acct-1"
+    trading.cancel()
+
+    with pytest.raises(trading.TradeRefused, match="real-money"):
+        trading.propose("BUY", "AAPL", 5, account="acct-2")  # Robinhood — refused
+    assert trading.pending() is None, "a refused order must not be left standing"
+
+
+def test_an_ambiguous_account_is_asked_about_not_guessed(monkeypatch):
+    """Two Alpaca Paper accounts, and the user just said "Alpaca".
+
+    Picking one is not a papercut — it silently puts money somewhere they did not
+    ask for, and produces no error at any layer. We stop and ask.
+    """
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second])
+
+    with pytest.raises(st.AmbiguousAccount):
+        trading.propose("BUY", "AAPL", 5, account="alpaca")
+    assert trading.pending() is None
+
+
+def test_the_model_is_told_to_ask_rather_than_the_question_crashing(monkeypatch):
+    """An ambiguous account reaches Claude as text, like every other refusal."""
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second])
+
+    result = tools.run_tool(
+        "preview_trade",
+        {"action": "BUY", "symbol": "AAPL", "units": 5, "account": "alpaca"},
+    )
+    assert isinstance(result, str) and "Refused" in result
+    assert "Which one" in result
+
+
+def test_an_ordinal_picks_the_right_account(monkeypatch):
+    """'buy 5 NVDA in my second account'."""
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second])
+
+    trading.propose("BUY", "NVDA", 5, account="my second account")
+    assert trading.pending()["account_id"] == "acct-2"
+
+
+def test_the_proposal_names_the_account_it_would_land_in(monkeypatch):
+    """The read-back must carry the destination — the user is the only one who can
+    catch a wrong account, and only if they are shown it."""
+    wire(monkeypatch, [PAPER])
+    order = trading.propose("BUY", "AAPL", 5)
+    assert order["account_label"], "the confirmation card has nothing to display"
+
+
+def test_cancel_all_does_not_sweep_across_accounts(monkeypatch):
+    """"Cancel everything" must stop at the edge of one account."""
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second])
+
+    seen = {}
+
+    def orders(open_only=False, account_id=None):
+        seen["account_id"] = account_id
+        return [{"order_id": "o1", "symbol": "NVDA", "action": "BUY",
+                 "units": 1, "status": "PENDING"}]
+
+    monkeypatch.setattr(st, "get_orders", orders)
+    trading.propose_cancel_all(account="my second account")
+
+    assert seen["account_id"] == "acct-2", "the batch read the wrong account's orders"
+    assert trading.pending()["account_id"] == "acct-2"

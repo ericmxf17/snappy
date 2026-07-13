@@ -233,7 +233,14 @@ TOOLS.append(
                 "order_id": {
                     "type": "string",
                     "description": "The order_id from get_orders.",
-                }
+                },
+                "account": {
+                    "type": "string",
+                    "description": (
+                        "Which account the order is in — the account_id from "
+                        "list_accounts, or what the user said ('my second account')."
+                    ),
+                },
             },
             "required": ["order_id"],
         },
@@ -248,7 +255,8 @@ TOOLS.append(
             "symbol. Cancels nothing — the user must confirm. Use for 'cancel all my "
             "orders', 'cancel everything pending', 'cancel all my Apple orders'. When "
             "you read this back, LIST what would be cancelled — one confirmation for a "
-            "whole batch means they have to be able to see what they're agreeing to."
+            "whole batch means they have to be able to see what they're agreeing to. "
+            "Scoped to ONE account; it does not sweep across every account they own."
         ),
         "input_schema": {
             "type": "object",
@@ -256,7 +264,14 @@ TOOLS.append(
                 "symbol": {
                     "type": "string",
                     "description": "Optional: only cancel open orders for this ticker.",
-                }
+                },
+                "account": {
+                    "type": "string",
+                    "description": (
+                        "Which account to cancel in — the account_id from list_accounts, "
+                        "or what the user said. Defaults to their first account."
+                    ),
+                },
             },
             "required": [],
         },
@@ -290,42 +305,67 @@ TOOLS.append(
                     "type": "number",
                     "description": "Number of shares.",
                 },
+                "account": {
+                    "type": "string",
+                    "description": (
+                        "Which account to trade in — the account_id from list_accounts, "
+                        "or what the user actually said ('my second account', 'the "
+                        "Alpaca one ending 8AUQ'). Omit only when they didn't say and "
+                        "there is just one account; with several, ASK rather than guess."
+                    ),
+                },
             },
             "required": ["action", "symbol", "units"],
         },
     }
 )
 
+TOOLS.append(
+    {
+        "name": "list_accounts",
+        "description": (
+            "Every brokerage account the user has connected, with a label, the last four "
+            "of the account number, whether it's a paper account, and its value. Call "
+            "this before trading when the user has more than one account and hasn't said "
+            "which one they mean — putting shares in the wrong account is not a small "
+            "mistake, so ask instead of guessing."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    }
+)
 
-def _preview_trade(action, symbol, units):
+
+def _preview_trade(action, symbol, units, account=None):
     """Claude's only trading tool — and it cannot execute anything.
 
     A refusal is returned as TEXT rather than raised, so Claude can explain out loud
-    why it won't do it instead of the question dying with a stack trace.
+    why it won't do it instead of the question dying with a stack trace. An ambiguous
+    account is returned the same way: the model is told to ask, not to pick.
     """
     try:
-        return trading.propose(action, symbol, units)
-    except trading.TradeRefused as e:
+        return trading.propose(action, symbol, units, account=account)
+    except (trading.TradeRefused, st.AmbiguousAccount) as e:
         return f"Refused: {e}"
 
 
-def _preview_cancel(order_id):
+def _preview_cancel(order_id, account=None):
     """Propose cancelling an order. Cancels nothing — the user still has to confirm."""
     try:
-        return trading.propose_cancel(order_id)
-    except trading.TradeRefused as e:
+        return trading.propose_cancel(order_id, account=account)
+    except (trading.TradeRefused, st.AmbiguousAccount) as e:
         return f"Refused: {e}"
 
 
-def _preview_cancel_all(symbol=None):
+def _preview_cancel_all(symbol=None, account=None):
     """Propose cancelling a whole batch. Cancels nothing."""
     try:
-        return trading.propose_cancel_all(symbol)
-    except trading.TradeRefused as e:
+        return trading.propose_cancel_all(symbol, account=account)
+    except (trading.TradeRefused, st.AmbiguousAccount) as e:
         return f"Refused: {e}"
 
 
 DISPATCH = {
+    "list_accounts": st.list_accounts,
     "get_portfolio_summary": st.get_portfolio_summary,
     "get_account_balance": st.get_account_balance,
     "check_symbol_held": st.check_symbol_held,

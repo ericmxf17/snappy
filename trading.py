@@ -128,7 +128,44 @@ def check_allowed():
     return account["brokerage"]
 
 
-def propose_cancel(order_id):
+def check_account(hint=None):
+    """Resolve a spoken account hint AND prove that exact account may be traded.
+
+    check_allowed() asks a WEAKER question: "does a healthy paper connection exist
+    anywhere?" With one account those are the same question. With several they are
+    not — and the difference is a fail-open bug. Connect one real brokerage alongside
+    a paper one and the old check passes (a paper account exists!) while the order
+    goes into the REAL account. The guard has to interrogate the account the money is
+    actually going to, so that is what this does.
+
+    Returns the account dict. Raises TradeRefused, or AmbiguousAccount if the hint
+    matched more than one account — we ask rather than guess where to put the money.
+    """
+    account = st.resolve_account(hint)   # AmbiguousAccount propagates on purpose
+
+    connection = next(
+        (c for c in st.list_connections() if c["connection_id"] == account["connection_id"]),
+        None,
+    )
+    if connection is None:
+        raise TradeRefused(f"I can't find the brokerage connection behind {account['label']}.")
+    if connection.get("disabled"):
+        raise TradeRefused(
+            f"The connection to {account['label']} is disabled, so I can't trade there. "
+            "Reconnect it first."
+        )
+    if (connection.get("type") or "").lower() != "trade":
+        raise TradeRefused(f"{account['label']} is connected read-only. I can't place orders there.")
+
+    if not config.ALLOW_LIVE_TRADING and not account["is_paper"]:
+        raise TradeRefused(
+            f"{account['label']} is a real-money account. I only trade paper accounts."
+        )
+
+    return account
+
+
+def propose_cancel(order_id, account=None):
     """Propose CANCELLING an open order. Cancels nothing.
 
     Same gate as placing: cancelling is a mutation, so the model may only propose it
@@ -137,11 +174,21 @@ def propose_cancel(order_id):
     """
     global _pending
 
-    check_allowed()
+    target = check_account(account)
 
-    order = next((o for o in st.get_orders(open_only=True) if o["order_id"] == order_id), None)
+    order = next(
+        (
+            o
+            for o in st.get_orders(open_only=True, account_id=target["account_id"])
+            if o["order_id"] == order_id
+        ),
+        None,
+    )
     if order is None:
-        raise TradeRefused("I can't find an open order with that id. It may already be filled.")
+        raise TradeRefused(
+            f"I can't find an open order with that id in {target['label']}. "
+            "It may already be filled."
+        )
 
     _pending = {
         "kind": "cancel",
@@ -150,30 +197,37 @@ def propose_cancel(order_id):
         "action": order["action"],
         "units": order["units"],
         "estimated_cost": 0,
+        "account_id": target["account_id"],
+        "account_label": target["label"],
         "proposed_at": time.monotonic(),
     }
     return dict(_pending)
 
 
-def propose_cancel_all(symbol=None):
+def propose_cancel_all(symbol=None, account=None):
     """Propose cancelling every open order (optionally just one symbol). Cancels nothing.
 
     One confirmation for the whole batch. That is a deliberate widening of blast
     radius, so the read-back has to LIST what will be pulled — a batch you can't see
     is a batch you can't refuse.
+
+    Scoped to ONE account. "Cancel everything" sweeping silently across every account
+    the user owns is a blast radius nobody asked for, so the account is named in the
+    read-back and the batch stops at its edge.
     """
     global _pending
 
-    check_allowed()
+    target = check_account(account)
 
-    orders = st.get_orders(open_only=True)
+    orders = st.get_orders(open_only=True, account_id=target["account_id"])
     if symbol:
         want = symbol.strip().upper()
         orders = [o for o in orders if (o["symbol"] or "").upper() == want]
 
     if not orders:
         raise TradeRefused(
-            f"You have no open {symbol.upper() + ' ' if symbol else ''}orders to cancel."
+            f"You have no open {symbol.upper() + ' ' if symbol else ''}orders to cancel "
+            f"in {target['label']}."
         )
 
     _pending = {
@@ -182,16 +236,23 @@ def propose_cancel_all(symbol=None):
         "symbol": symbol.upper() if symbol else None,
         "units": sum(o["units"] or 0 for o in orders),
         "estimated_cost": 0,
+        "account_id": target["account_id"],
+        "account_label": target["label"],
         "proposed_at": time.monotonic(),
     }
     return dict(_pending)
 
 
-def propose(action, symbol, units):
-    """Run the guards and ask the brokerage what this order would do. Places nothing."""
+def propose(action, symbol, units, account=None):
+    """Run the guards and ask the brokerage what this order would do. Places nothing.
+
+    account is whatever the user SAID ("my second account", "Alpaca", "...8AUQ"), or
+    None for their default account. The guards run against the account the shares
+    would actually land in — see check_account.
+    """
     global _pending
 
-    check_allowed()
+    target = check_account(account)
 
     action = action.upper()
     if action not in ("BUY", "SELL"):
@@ -202,7 +263,7 @@ def propose(action, symbol, units):
         raise TradeRefused("That's not a number of shares I can trade.")
 
     try:
-        preview = st.preview_trade(action, symbol, units)
+        preview = st.preview_trade(action, symbol, units, account_id=target["account_id"])
     except TradeRefused:
         raise
     except Exception as e:
@@ -235,7 +296,22 @@ def propose(action, symbol, units):
     if not preview["trade_id"]:
         raise TradeRefused("The brokerage wouldn't validate that order.")
 
-    _pending = {**preview, "kind": "trade", "proposed_at": time.monotonic()}
+    # The account is carried on the proposal so the read-back can NAME it. With more
+    # than one account, "buy 5 NVDA" is not a complete description of what is about to
+    # happen — the same order into the wrong account is the wrong outcome, and the
+    # user is the only one who can catch that. The panel shows this.
+    #
+    # It is carried for display only. trade_id was minted by get_order_impact against
+    # this account, and place_order accepts nothing but that id — so the account is
+    # already baked in and confirm() cannot retarget it, exactly as it cannot change
+    # the symbol or the size.
+    _pending = {
+        **preview,
+        "kind": "trade",
+        "account_id": target["account_id"],
+        "account_label": target["label"],
+        "proposed_at": time.monotonic(),
+    }
     return dict(_pending)
 
 
@@ -286,8 +362,13 @@ def confirm():
 
     kind = order.get("kind")
 
+    # The account the proposal was built against. Cancelling without it would go to
+    # the DEFAULT account, which for a multi-account user is simply the wrong one —
+    # the cancel would fail, or worse, hit an order of the same id somewhere else.
+    account_id = order.get("account_id")
+
     if kind == "cancel":
-        result = st.cancel_order(order["order_id"])
+        result = st.cancel_order(order["order_id"], account_id=account_id)
         return {**order, **result}
 
     if kind == "cancel_all":
@@ -297,7 +378,7 @@ def confirm():
         cancelled, failed = [], []
         for o in order["orders"]:
             try:
-                st.cancel_order(o["order_id"])
+                st.cancel_order(o["order_id"], account_id=account_id)
                 cancelled.append(o)
             except Exception as e:  # already filled, already cancelled, network
                 failed.append({**o, "error": str(e)})

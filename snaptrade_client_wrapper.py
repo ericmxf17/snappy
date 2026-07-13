@@ -21,18 +21,36 @@ _USER = {
 
 
 def list_accounts():
-    """All connected brokerage accounts."""
+    """All connected brokerage accounts.
+
+    connection_id and is_paper come straight from SnapTrade and matter for safety:
+    trading.py must be able to ask "is the account I am about to trade INTO a paper
+    account on a healthy connection?" — a question it cannot answer from an account id
+    alone. is_paper is the brokerage's own flag, which beats sniffing for the word
+    "paper" in a display name.
+
+    label is what a person would say out loud. Two Alpaca paper accounts are both
+    called "Alpaca Paper", so the name alone cannot tell them apart; the last four of
+    the account number can.
+    """
     accounts = _client.account_information.list_user_accounts(**_USER).body
-    return [
-        {
-            "account_id": a.get("id"),
-            "name": a.get("name"),
-            "number": a.get("number"),
-            "institution": a.get("institution_name"),
-            "total_value": (a.get("balance") or {}).get("total"),
-        }
-        for a in accounts
-    ]
+    out = []
+    for i, a in enumerate(accounts, start=1):
+        number = a.get("number") or ""
+        out.append(
+            {
+                "account_id": a.get("id"),
+                "name": a.get("name"),
+                "number": number,
+                "institution": a.get("institution_name"),
+                "connection_id": a.get("brokerage_authorization"),
+                "is_paper": bool(a.get("is_paper")),
+                "label": f"{a.get('institution_name') or a.get('name')} ...{number[-4:]}",
+                "ordinal": i,  # "my first account", "the second one"
+                "total_value": (a.get("balance") or {}).get("total"),
+            }
+        )
+    return out
 
 
 def _default_account_id():
@@ -40,6 +58,77 @@ def _default_account_id():
     if not accounts:
         raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
     return accounts[0]["account_id"]
+
+
+_ORDINALS = {
+    "first": 1, "1st": 1, "one": 1, "1": 1, "primary": 1, "main": 1,
+    "second": 2, "2nd": 2, "two": 2, "2": 2, "other": 2,
+    "third": 3, "3rd": 3, "three": 3, "3": 3,
+}
+
+
+class AmbiguousAccount(Exception):
+    """The hint matched more than one account. Ask; never guess.
+
+    Guessing which account to put someone's money in is not a UX papercut, it is the
+    wrong outcome with no error message. If two accounts match, we stop.
+    """
+
+    def __init__(self, hint, matches):
+        self.hint, self.matches = hint, matches
+        names = " or ".join(m["label"] for m in matches)
+        super().__init__(f'"{hint}" could mean {names}. Which one?')
+
+
+def resolve_account(hint=None):
+    """Turn what a person SAID into exactly one account.
+
+    Accepts an account id, an account number (full or last-4), an ordinal ("my second
+    account"), or a brokerage name ("Alpaca"). Returns the default account when the
+    hint is empty — the single-account behaviour every caller had before.
+
+    Raises AmbiguousAccount rather than picking. "Alpaca" matches both of Eric's
+    paper accounts, and silently choosing one would put shares somewhere he didn't
+    ask for.
+    """
+    accounts = list_accounts()
+    if not accounts:
+        raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+
+    if hint is None or not str(hint).strip():
+        return accounts[0]
+
+    want = str(hint).strip().lower()
+
+    # An exact id or account number is unambiguous by construction.
+    for a in accounts:
+        if want in (a["account_id"].lower(), (a["number"] or "").lower()):
+            return a
+
+    # "...80wr20", "the one ending 8auq"
+    tail = want.lstrip(". ")
+    exact_tail = [a for a in accounts if (a["number"] or "").lower().endswith(tail)] if tail else []
+    if len(exact_tail) == 1:
+        return exact_tail[0]
+
+    # "my second account"
+    for word, n in _ORDINALS.items():
+        if word in want.split():
+            match = [a for a in accounts if a["ordinal"] == n]
+            if match:
+                return match[0]
+
+    # A brokerage or nickname — often ambiguous, which is the point.
+    named = [
+        a for a in accounts
+        if want in (a["institution"] or "").lower() or want in (a["name"] or "").lower()
+    ]
+    if len(named) == 1:
+        return named[0]
+    if len(named) > 1:
+        raise AmbiguousAccount(hint, named)
+
+    raise AmbiguousAccount(hint, accounts)
 
 
 def get_account_balance(account_id=None):
