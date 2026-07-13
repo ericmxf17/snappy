@@ -1,0 +1,77 @@
+2 account(s) connected
+
+
+==========================================================================
+  FINDING 1: Symbol search ranks a 2x SHORT ETF above the company (SAFETY)
+==========================================================================
+
+  symbol_search_user_account(substring="nvidia") ->
+    1. NVD    GraniteShares 2x Short Nvidia ETF USD
+    2. NVDO   Leverage Shares 2x Capped Accelerated NVIDIA Monthly
+    3. NVPS   PurePlay Nvidia Ecosystem Picks & Shovels Index ETF
+    4. NVDA   NVIDIA Corporation
+    5. NVDL   Graniteshares 2x Long Nvidia Daily ETF
+    6. NVDS   Aptus Collared Investment Opportunity Trust - 1.5x S
+
+  symbol_search_user_account(substring="apple") ->
+    1. MLP    Maui Land & Pineapple Company, Inc.
+    2. DPS    Dr Pepper Snapple Group, Inc Dr Pepper Snapple Group
+    3. APLE   Apple Hospitality REIT, Inc.
+    4. AAPX   T-REX 2X Liquid Natural Gas Apple Daily Target Fund
+    5. PEGY   Pineapple Energy Inc
+    6. AAPL   Apple Inc.
+
+  An LLM or a voice UI takes result #1. For "nvidia" that is a 2x INVERSE ETF,
+  so "buy me some Nvidia" SHORTS Nvidia at leverage. It fills cleanly.
+
+==========================================================================
+  FINDING 2: The SDK exposes methods that are 410 Gone
+==========================================================================
+  account_information.get_all_user_holdings            HTTP 410
+  transactions_and_reporting.get_activities            HTTP 410
+  account_information.get_user_account_return_rates    HTTP 403
+
+  These are importable, typed, and autocompleted. get_all_user_holdings is the
+  first method you reach for when writing a multi-brokerage app.
+
+==========================================================================
+  FINDING 3: Reads randomly stall for 20-30 seconds
+==========================================================================
+
+  Six cold rounds. Watch WHERE the stall lands: it moves between balance and
+  positions, and between accounts. It is not one slow endpoint, and it is not
+  one slow account — but the frequency differs enormously between accounts.
+
+    acct1: balance=   0.3s  positions=   0.3s  |  acct2: balance=   0.3s  positions=   0.3s
+    acct1: balance=   0.2s  positions=   0.4s  |  acct2: balance=   0.3s  positions=   0.4s
+    acct1: balance=  22.3s  positions=   0.4s  |  acct2: balance=   1.4s  positions=   0.4s
+    acct1: balance=   0.2s  positions=  30.6s  |  acct2: balance=   0.3s  positions=   0.3s
+    acct1: balance=   2.3s  positions=   1.4s  |  acct2: balance=   0.2s  positions=   0.4s
+    acct1: balance=   0.2s  positions=  22.6s  |  acct2: balance=   0.2s  positions=   1.6s
+
+    acct1 (...WR20):  median  12.3s   worst  30.6s
+    acct2 (...8AUQ):  median   0.4s   worst   1.6s
+
+  A balance call returns cash. It does not read positions. So a 25s balance call
+  cannot be explained by how many holdings the account has.
+
+  For a voice assistant this is not slow, it is BROKEN: a 27-second pause after a
+  spoken question is indistinguishable from a hang. And caching cannot help — a
+  COLD read is precisely what stalls.
+
+==========================================================================
+  FINDING 4: The CLI cannot create a trade-enabled connection
+==========================================================================
+
+  $ npx @snaptrade/snaptrade-cli@0.1.38 connect --help
+
+    Usage: snaptrade connect [options]
+    Options:
+      --broker <slug>  Brokerage slug to connect
+      -h, --help       display help for command
+
+  No --connection-type. Every connection the CLI makes is READ-ONLY, and nothing in
+  its output says so — the trades just fail later. connection_type="trade" has to be
+  passed to the API directly.
+
+==========================================================================
