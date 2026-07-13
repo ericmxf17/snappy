@@ -597,15 +597,22 @@ def get_portfolio_summary(account_id=None):
             f"as if they were exact."
         )
 
-    # SnapTrade can report an order EXECUTED, with a fill price and quantity, while its
-    # positions endpoint still shows an empty account. Both statements are about the
-    # same account and they contradict each other. Observed 13 Jul 2026: seven orders
-    # filled at the open, confirmed in the brokerage's own dashboard, and positions
-    # stayed empty for over 40 minutes. refresh_brokerage_authorization — the documented
-    # way to force a re-sync — returns 403 on this tier.
+    # Cross-check the positions against orders that actually FILLED, and report anything
+    # the positions fail to explain.
     #
-    # An app that just reads positions tells the user they own NOTHING. That is a lie
-    # the platform hands you, and it must not be passed on.
+    # RETRACTED, and left here as a warning: this check was written because positions kept
+    # coming back empty after seven orders filled at the open, and I was certain SnapTrade
+    # was failing to sync. I had the symptom, a theory, and a bug report half-written.
+    #
+    # It was OUR PARSER. get_all_account_positions returns {"results": [{"instrument": ...}]}
+    # and we were reading a different shape, so it returned [] — and an empty list is
+    # indistinguishable from an empty account. The platform was fine. I was wrong, loudly,
+    # for an evening. (See get_positions, which now handles both shapes.)
+    #
+    # The check survives because it is still worth having — if positions and fills ever do
+    # disagree, the user should hear about it rather than be told they own nothing. But it
+    # no longer accuses anyone. Suspect your own code first.
+    #
     # A staleness CHECK that fails must not take the portfolio down with it. This is a
     # warning layered on top of the answer, not part of it.
     try:
