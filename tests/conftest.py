@@ -8,7 +8,9 @@ offline, in about a second, and costs nothing.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+)
 
 # config.py reads these at import and raises if they're missing. Set fakes BEFORE
 # anything imports it, so the suite runs on a machine with no .env at all (a fresh

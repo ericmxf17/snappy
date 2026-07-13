@@ -37,7 +37,8 @@ from assistant import answer
 #
 # These are TEMPLATE images (black + alpha), so macOS tints them for the light or dark
 # menubar itself. A coloured icon would look pasted on in one of the two.
-ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
+ASSETS = os.path.join(ROOT, "assets")
 MARKS = {
     "idle": "menubar-idle@2x.png",
     "listening": "menubar-listening@2x.png",
@@ -692,11 +693,11 @@ def _build():
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, cwd=ROOT,
         ).stdout.strip()
         dirty = subprocess.run(
             ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, cwd=ROOT,
         ).stdout.strip()
         return f"{sha}{'+dirty' if dirty else ''}"
     except Exception:

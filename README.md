@@ -115,7 +115,7 @@ than it had any right to.
   list is indistinguishable from an empty account — a parsing bug that masquerades as a fact.
   Now it parses both shapes, and cross-checks positions against filled orders.
 
-[trading.py](trading.py) is the only file that can move money, and it is deliberately short
+[trading.py](src/trading.py) is the only file that can move money, and it is deliberately short
 enough to read in one sitting.
 
 ---
@@ -168,7 +168,7 @@ three, which is enough to see the cross-account features work.
 **5. Run it — from Terminal.app:**
 
 ```sh
-./venv/bin/python main.py
+./venv/bin/python src/main.py
 ```
 
 A waveform icon appears in the menubar. **Hold ⌥, speak, let go.**

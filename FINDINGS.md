@@ -41,7 +41,7 @@ the first result. A user who says *"buy me some Nvidia"* then **shorts Nvidia at
 The order executes cleanly. Nothing errors. The user finds out when the position moves the wrong
 way.
 
-**What Snappy does about it** ([`snaptrade_client_wrapper.py`](snaptrade_client_wrapper.py), `search_symbols`):
+**What Snappy does about it** ([`snaptrade_client_wrapper.py`](src/snaptrade_client_wrapper.py), `search_symbols`):
 re-ranks client-side — exact ticker match first, common stock ahead of ETFs, and anything whose
 description matches `2x / 3x / short / inverse / bear / bull / leveraged` is pushed last **and
 tagged with an explicit `WARNING` field** that the model is told never to silently accept.
@@ -102,7 +102,7 @@ There is no `--connection-type`. The CLI always creates a **read-only** connecti
 This cost me real time. I reconnected both brokerages through the CLI, everything looked healthy,
 and every trade failed — because the connections were read-only and nothing in the CLI output said
 so. The fix was to stop using the CLI and call the API directly with
-`connection_type="trade"` ([`connect.py`](connect.py)).
+`connection_type="trade"` ([`connect.py`](src/connect.py)).
 
 **Suggestion:** add `--connection-type read|trade` to `snaptrade connect`, and print the
 connection type in `snaptrade connections list`. Right now the one property that determines

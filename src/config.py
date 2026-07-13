@@ -4,7 +4,13 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Point at the repo root explicitly. A bare load_dotenv() searches from wherever you
+# happened to be standing when you ran python — which was harmless when this file sat
+# next to .env, but now that the code lives in src/ it would silently find nothing if
+# you launched from anywhere else, and the app would die on a missing key instead of a
+# missing file. .env stays at the root; it is gitignored and never travels.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_ROOT, ".env"))
 
 SNAPTRADE_CLIENT_ID = os.environ["SNAPTRADE_CLIENT_ID"]
 SNAPTRADE_CONSUMER_KEY = os.environ["SNAPTRADE_CONSUMER_KEY"]

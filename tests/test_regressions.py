@@ -49,11 +49,14 @@ def test_snappy_has_no_voice():
     talking Snappy out of its own trade. If `say` comes back, so do those.
     """
     import pathlib
-    root = pathlib.Path(__file__).resolve().parent.parent
+    src = pathlib.Path(__file__).resolve().parent.parent / "src"
     # transcribe.py is exempt: its self-test uses `say` to GENERATE a test WAV.
     # That's input, not output.
     for name in ("main.py", "assistant.py", "trading.py", "ui.py", "tools.py"):
-        source = (root / name).read_text()
+        source = (src / name).read_text()
+        # This test greps SOURCE, so a wrong path would make it pass by finding
+        # nothing rather than fail. Prove the file is actually there.
+        assert source, f"{name} not found under src/ — this test was checking nothing"
         assert '["say"' not in source, f"{name} shells out to `say`"
         assert "['say'" not in source, f"{name} shells out to `say`"
 
