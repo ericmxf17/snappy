@@ -755,7 +755,13 @@
 
     // Picking an account is not the same as agreeing to the trade — this only says
     // WHERE. The confirm card comes next, priced, and still has to be accepted.
-    for (const b of feed.querySelectorAll('[data-account]')) {
+    //
+    // Scoped to the DOCUMENT, not to #feed. The trade card and the account picker moved
+    // into #pinned when the tabs landed, and this kept searching #feed — so the buttons
+    // rendered perfectly and had no handler attached at all. Clicking them did nothing,
+    // silently. Every actionable control in this app is now bound document-wide, because
+    // "which container is it in today" is not something a click handler should depend on.
+    for (const b of document.querySelectorAll('[data-account]')) {
       b.onclick = () => send({type: 'account', account_id: b.dataset.account});
     }
 
@@ -766,7 +772,7 @@
 
     // Expanding an account is purely local — no round-trip to Python, and nothing to
     // wait for. The Set is what survives the next re-render.
-    for (const b of feed.querySelectorAll('[data-acct]')) {
+    for (const b of document.querySelectorAll('[data-acct]')) {
       b.onclick = () => {
         const id = b.dataset.acct;
         const open = !openAccounts.has(id);
