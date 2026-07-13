@@ -397,15 +397,33 @@ class Snappy(rumps.App):
             print("portfolio refresh failed:", e)
 
     def keep_fresh(self):
-        """Re-read the portfolio every 60s, so the panel isn't quoting a stale number.
+        """Re-read the portfolio every 30s, so the panel isn't quoting a stale number.
 
         It used to refresh only at startup, after an answer, and after a trade — so the
         balance on screen could be an hour old and look perfectly current. A number with
         no timestamp that never changes is indistinguishable from a number that is right.
+
+        This thread also EATS SNAPTRADE'S LATENCY so the user never does. st.prime()
+        force-refreshes every account concurrently; SnapTrade randomly stalls a single
+        account for 23-28 seconds (see snaptrade_client_wrapper.prime), and that stall
+        used to land in the middle of a question — Claude asked for the portfolio, and
+        you sat watching a spinner for half a minute. Now it lands here, on a background
+        thread, where nobody is waiting for it.
+
+        Primed FIRST, then read: refresh_portfolio() then hits a warm cache and returns
+        immediately, so the panel and the model both get fresh data without paying for it.
         """
         while True:
-            time.sleep(30)
+            try:
+                st.prime()
+            except Exception as e:
+                # A failed prime is not worth taking the refresher down for — the cache
+                # keeps its last good values and the next tick tries again.
+                print("prime failed:", e)
             self.refresh_portfolio()
+            # Sleep LAST, not first. Sleeping first left the cache cold for the opening
+            # 30 seconds — precisely when someone launches the app and asks it something.
+            time.sleep(30)
 
     # --- triggers ----------------------------------------------------------
 

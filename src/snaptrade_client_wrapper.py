@@ -6,6 +6,7 @@ can be handed straight to Claude as tool output.
 
 import functools
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -24,9 +25,17 @@ def _cached(seconds):
     portfolio twice and the account list twice while buying a single share, and each
     repeat was a real round-trip that the user sat and waited through.
 
-    The window is deliberately short. It has to survive one question, not outlive the
-    facts — a stale balance is a wrong denominator, and the denominator is what every
-    "how would this fit?" answer is built on. Any order Snappy places clears it.
+    The window (90s) is longer than the background refresh interval (30s) ON PURPOSE.
+    prime() re-reads everything every 30 seconds, so a live entry is never more than
+    ~30s old in practice — the extra headroom exists only so that a slow refresh (see
+    prime(): SnapTrade can stall a single account for nearly 30 seconds) cannot let an
+    entry lapse and drop a reader onto a cold call. The TTL is a floor under the
+    refresher, not the thing keeping the data fresh.
+
+    A stale balance is a wrong denominator, and the denominator is what every "how would
+    this fit?" answer is built on. So any order Snappy places clears the whole cache, and
+    the trade guards never trust it: get_order_impact re-checks cash server-side, live,
+    at the moment of the trade.
     """
     def wrap(fn):
         hits = {}
@@ -42,7 +51,22 @@ def _cached(seconds):
             hits[key] = (now, value)
             return value
 
+        def refresh(*args, **kwargs):
+            """Fetch for real and overwrite the entry, WITHOUT ever emptying it.
+
+            This is what lets a background thread eat SnapTrade's latency instead of the
+            user. It deliberately does not call forget() first: that would leave a hole
+            in the cache, and whoever read it during the ~27s refetch would take the
+            stall we are trying to hide. The old value stays readable right up until the
+            new one lands.
+            """
+            key = (args, tuple(sorted(kwargs.items())))
+            value = fn(*args, **kwargs)
+            hits[key] = (time.monotonic(), value)
+            return value
+
         inner.forget = hits.clear
+        inner.refresh = refresh
         return inner
 
     return wrap
@@ -58,6 +82,48 @@ def invalidate():
         forget = getattr(fn, "forget", None)
         if forget:
             forget()
+
+
+def prime():
+    """Re-read everything, for every account, concurrently — off the user's path.
+
+    THIS IS THE ANSWER TO SNAPTRADE'S LATENCY, and the latency is real: measured 13 Jul
+    2026, one connection answered every call in ~0.2s while the other randomly stalled
+    for 23–28 SECONDS. The stall is not attached to an endpoint — it lands on whichever
+    call reaches that account first, balance or positions alike — so no amount of
+    caching or picking a faster endpoint avoids it. Something has to eat it.
+
+    So a background thread eats it, every 30 seconds, while nobody is waiting. By the
+    time you ask a question the answer is already sitting in the cache, and the cache is
+    never empty while this runs, because refresh() overwrites in place. The user's
+    critical path stops containing a coin-flip for 27 seconds.
+
+    Best-effort by design: if a refresh fails, the previous value stands and the app
+    carries on with data it can honestly timestamp. Never called on the UI thread.
+    """
+    try:
+        accounts = list_accounts.refresh()
+    except Exception:
+        return  # can't even list accounts; the next tick can try again
+
+    def pull(aid):
+        for read in (
+            lambda: get_account_balance.refresh(aid),
+            lambda: get_positions.refresh(aid),
+            # Both call shapes get_portfolio_summary and unsynced_fills actually use —
+            # they are different cache keys, and priming only one leaves the other cold.
+            lambda: get_orders.refresh(account_id=aid),
+            lambda: get_orders.refresh(open_only=True, account_id=aid),
+        ):
+            try:
+                read()
+            except Exception:
+                pass  # one stale read must not abort the rest of the account
+
+    if accounts:
+        with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
+            list(pool.map(pull, [a["account_id"] for a in accounts]))
+
 
 _USER = {
     "user_id": config.SNAPTRADE_USER_ID,
@@ -76,7 +142,7 @@ def _hours_since(timestamp):
     return round((datetime.now(timezone.utc) - then).total_seconds() / 3600, 1)
 
 
-@_cached(20)
+@_cached(90)
 def list_accounts():
     """All connected brokerage accounts.
 
@@ -198,7 +264,7 @@ def resolve_account(hint=None):
     raise AmbiguousAccount(hint, accounts)
 
 
-@_cached(20)
+@_cached(90)
 def get_account_balance(account_id=None):
     """Cash and buying power for one account."""
     account_id = account_id or _default_account_id()
@@ -215,7 +281,7 @@ def get_account_balance(account_id=None):
     ]
 
 
-@_cached(20)
+@_cached(90)
 def get_positions(account_id=None):
     """Current equity holdings for one account.
 
@@ -365,13 +431,93 @@ def unsynced_fills(account_id=None):
     return gaps
 
 
+def _whole_portfolio():
+    """get_portfolio_summary across EVERY account. Same contract, bigger truth.
+
+    Deliberately returns the same keys as the single-account version, so every caller,
+    prompt and test that reads total_portfolio_value / cash_pct / positions[].weight_pct
+    keeps working — they just finally describe the whole portfolio instead of a slice.
+    """
+    book = get_all_holdings()
+
+    total = book["net_worth"]
+    cash = book["total_cash"]
+    positions = sorted(
+        book["combined_holdings"], key=lambda p: p["market_value"], reverse=True
+    )
+
+    summary = {
+        "total_portfolio_value": round(total, 2),
+        "cash": round(cash, 2),
+        "cash_pct": round(100 * cash / total, 2) if total else 0.0,
+        "holdings_value": round(book["total_holdings_value"], 2),
+        "positions": positions,
+        "account_count": book["account_count"],
+        # Name them, so Claude can say WHERE something is rather than just how much.
+        "accounts": [
+            {"label": a.get("label"), "total_value": (a.get("total_value") or {}).get("amount")}
+            for a in book["accounts"]
+        ],
+    }
+
+    # Open orders are money already committed, in whichever account they sit. Sizing a
+    # new position against cash that a pending buy will eat double-spends it.
+    pending = []
+    for a in book["accounts"]:
+        try:
+            pending += get_orders(open_only=True, account_id=a["account_id"])
+        except Exception:
+            pass  # one account's orders failing must not blind the whole portfolio
+    if pending:
+        committed = sum(
+            (o["units"] or 0) * (o["execution_price"] or 0)
+            for o in pending
+            if o["action"] == "BUY"
+        )
+        summary["pending_orders"] = pending
+        summary["pending_note"] = (
+            f"{len(pending)} order(s) are still open and have NOT filled. They are not in "
+            f"the positions above. Factor them in when sizing anything new."
+        )
+        if committed:
+            summary["cash_after_pending_fill"] = round(cash - committed, 2)
+
+    # An unpriced symbol counts as $0, which understates the total and therefore
+    # OVERSTATES every weight computed against it. Say so; never quietly absorb it.
+    unpriced = [p["symbol"] for p in positions if not p.get("market_value")]
+    if unpriced:
+        summary["warning"] = (
+            f"No live price for {', '.join(unpriced)}, so they are counted as $0. "
+            f"The total and every percentage are therefore UNDERSTATED and OVERSTATED "
+            f"respectively. Say so rather than quoting the percentages as if exact."
+        )
+
+    if book.get("stale_note"):
+        summary["stale_note"] = book["stale_note"]
+    return summary
+
+
 def get_portfolio_summary(account_id=None):
     """Holdings with their weights, plus cash and total value.
 
     The weights are computed here rather than left to the model: position sizing
     is the headline question ("how would X fit?"), and that math shouldn't be
     able to drift.
+
+    WITH NO ACCOUNT, THIS MEANS EVERY ACCOUNT. It used to mean "the first one", which
+    is the single worst default this codebase could have had: this is the tool Claude
+    reaches for to answer "how am I doing" and to get the DENOMINATOR for "how would X
+    fit into my portfolio". With two brokerages connected it was sizing positions
+    against one of them and calling the answer the portfolio — observed live, quoting
+    "0.86% of a $99,618 portfolio" while the panel beside it read $149,575.
+
+    A multi-brokerage app whose assistant can only see one brokerage is not a
+    multi-brokerage app. Pass an explicit account_id to ask about just that one — which
+    is what preview_trade does, because the cash that funds a trade is per-account.
     """
+    if account_id is None:
+        return _whole_portfolio()
+
     account_id = account_id or _default_account_id()
 
     balances = get_account_balance(account_id)
@@ -598,7 +744,7 @@ def _num(v):
         return None
 
 
-@_cached(20)
+@_cached(90)
 def get_orders(open_only=False, account_id=None):
     """Orders and their fill status.
 
@@ -656,6 +802,31 @@ def get_all_holdings():
     accounts = list_accounts()
     if not accounts:
         raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+
+    # Fetch every account CONCURRENTLY, then let the loop below read from the cache.
+    #
+    # SnapTrade's balance endpoint is slow and wildly erratic — measured 13 Jul 2026 on
+    # two accounts on the same connection, in the same second: one answered in 0.2s
+    # every time, the other took 9.5s, then 27.5s, then 0.2s, then 10.4s. Fetched one
+    # after another, those latencies ADD, so the whole portfolio was hostage to the
+    # slowest account and a refresh could take 43 seconds.
+    #
+    # Fanned out, the wall clock is the slowest account rather than the sum of all of
+    # them — and it gets better, not worse, as you connect more brokerages, which is
+    # the direction this app is supposed to scale.
+    #
+    # This only warms the cache; the loop below is unchanged and still surfaces errors
+    # properly, so a failure here costs nothing but the speed-up.
+    if len(accounts) > 1:
+        def _warm(aid):
+            try:
+                get_account_balance(aid)
+                get_positions(aid)
+            except Exception:
+                pass  # the serial loop re-raises it where it can be reported
+
+        with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
+            list(pool.map(_warm, [a["account_id"] for a in accounts]))
 
     books, total_cash, total_holdings = [], 0.0, 0.0
     combined = {}  # symbol -> the true, cross-account position
