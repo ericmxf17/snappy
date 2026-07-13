@@ -21,6 +21,7 @@ STATE = {
     "cash": None,
     "positions": [],
     "account_count": 1,  # >1 → the panel stops naming a single brokerage
+    "updated_at": None,  # when the portfolio was last actually re-read
     "unsynced": [],  # filled at the brokerage, not yet in SnapTrade's positions
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
     "pending": None,  # a proposed trade awaiting your yes — see trading.py

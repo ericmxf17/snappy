@@ -335,6 +335,10 @@ class Snappy(rumps.App):
                     for a in book["accounts"]
                     for gap in (a.get("unsynced_fills") or [])
                 ],
+                # The panel counts up from this, so "live" is something the user can
+                # SEE rather than something we assert. A number that never moves and
+                # carries no timestamp is indistinguishable from a number that is stale.
+                updated_at=time.time(),
             )
             # Prime the transcriber with the tickers you actually hold. Whisper guesses
             # from context, so knowing you own NVDA is the difference between hearing
@@ -351,7 +355,7 @@ class Snappy(rumps.App):
         no timestamp that never changes is indistinguishable from a number that is right.
         """
         while True:
-            time.sleep(60)
+            time.sleep(30)
             self.refresh_portfolio()
 
     # --- triggers ----------------------------------------------------------
