@@ -629,3 +629,110 @@ def test_cancel_all_does_not_sweep_across_accounts(monkeypatch):
 
     assert seen["account_id"] == "acct-2", "the batch read the wrong account's orders"
     assert trading.pending()["account_id"] == "acct-2"
+
+
+# --- the account picker: Snappy asks WHERE, it does not decide ---------------
+
+def test_not_saying_an_account_asks_instead_of_defaulting(monkeypatch):
+    """'Buy one share of Micron' — in which account?
+
+    Snappy used to answer that question itself by silently taking the first account.
+    That is the same class of mistake as guessing the ticker: no error anywhere, and
+    the shares appear somewhere the user never chose.
+    """
+    second = {**PAPER, "connection_id": "c9"}
+    placed = wire(monkeypatch, [PAPER, second])
+
+    with pytest.raises(trading.AccountNeeded) as e:
+        trading.propose("BUY", "MU", 1)
+
+    assert len(e.value.accounts) == 2
+    assert trading.pending() is None, "nothing may be pending before an account exists"
+    assert placed == [], "and certainly nothing placed"
+    assert trading.choosing()["symbol"] == "MU", "the trade is parked for the picker"
+
+
+def test_one_account_still_needs_no_picker(monkeypatch):
+    """With a single account there is nothing to ask about. Don't nag."""
+    wire(monkeypatch, [PAPER])
+    order = trading.propose("BUY", "MU", 1)
+    assert order["account_id"] == "acct-1"
+    assert trading.choosing() is None
+
+
+def test_picking_an_account_prices_it_but_places_nothing(monkeypatch):
+    """Choosing WHERE is not saying YES. The confirm card still has to be accepted."""
+    second = {**PAPER, "connection_id": "c9"}
+    placed = wire(monkeypatch, [PAPER, second])
+
+    with pytest.raises(trading.AccountNeeded):
+        trading.propose("BUY", "MU", 1)
+
+    order = trading.choose_account("acct-2")
+    assert order["account_id"] == "acct-2"
+    assert order["symbol"] == "MU" and order["units"] == 1
+    assert placed == [], "picking an account must not execute anything"
+
+    trading.confirm()
+    assert placed == ["trade-1"], "only the confirmation places it"
+
+
+def test_the_picker_only_offers_accounts_it_could_actually_trade(monkeypatch):
+    """A real-money account is not a valid answer to 'which account?'.
+
+    Offering one we would then refuse is a trap: the user clicks it and gets told no.
+    With one paper and one real account there is exactly ONE legal choice, so there is
+    nothing to ask about — it just uses it.
+    """
+    wire(monkeypatch, [PAPER, LIVE])
+
+    order = trading.propose("BUY", "MU", 1)
+    assert order["account_id"] == "acct-1", "the paper one"
+    assert trading.choosing() is None, "one candidate is not a question"
+
+
+def test_a_real_money_account_sorting_first_does_not_block_the_trade(monkeypatch):
+    """The default used to be "the first account", full stop.
+
+    Put the real-money account first and "buy 1 MU" refused outright — while a
+    perfectly good paper account sat right behind it in the list. The default has to
+    be the first account we can actually TRADE, not the first account that exists.
+    """
+    wire(monkeypatch, [LIVE, PAPER])          # real money sorts FIRST
+
+    order = trading.propose("BUY", "MU", 1)
+    assert order["account_id"] == "acct-2", "it must fall through to the paper account"
+
+
+def test_no_tradeable_account_at_all_is_a_refusal(monkeypatch):
+    """And with nothing legal to trade in, it refuses — it does not pick the real one."""
+    wire(monkeypatch, [LIVE])
+    with pytest.raises(trading.TradeRefused, match="paper"):
+        trading.propose("BUY", "MU", 1)
+
+
+def test_picking_still_runs_every_guard(monkeypatch):
+    """choose_account is a second gate, not a back door around the first."""
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second], price=300.0)
+    monkeypatch.setattr(config, "MAX_ORDER_USD", 100)
+
+    with pytest.raises(trading.AccountNeeded):
+        trading.propose("BUY", "MU", 5)          # $1,500, over the cap
+
+    with pytest.raises(trading.TradeRefused, match="limit"):
+        trading.choose_account("acct-2")         # the cap must still bite
+
+
+def test_dismissing_drops_the_half_made_trade(monkeypatch):
+    """Dismiss must not leave a trade parked, waiting to be resurrected by a stray click."""
+    second = {**PAPER, "connection_id": "c9"}
+    wire(monkeypatch, [PAPER, second])
+
+    with pytest.raises(trading.AccountNeeded):
+        trading.propose("BUY", "MU", 1)
+
+    trading.cancel()
+    assert trading.choosing() is None
+    with pytest.raises(trading.TradeRefused):
+        trading.choose_account("acct-2")

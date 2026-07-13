@@ -22,6 +22,7 @@ STATE = {
     "positions": [],
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
     "pending": None,  # a proposed trade awaiting your yes — see trading.py
+    "choose": None,  # a trade waiting on WHICH account — the panel offers the list
     "notice": "",  # a short status line: "cancelled", "I didn't hear anything"
     "dirty": True,
 }

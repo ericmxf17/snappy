@@ -186,6 +186,23 @@
   .trade .acct { font-size: 11px; color: var(--amber); margin-top: 6px;
                  letter-spacing: .04em; text-transform: uppercase; }
 
+  /* ---- account picker --------------------------------------------------
+     A real list, not a <select>. A dropdown hides the options behind a click and
+     shows a default already chosen — and "already chosen" is the exact thing we are
+     trying not to do with someone's money. Every account is visible, with what it
+     holds, and none is preselected. */
+  .pick .opt { display: flex; align-items: baseline; gap: 8px; width: 100%;
+               text-align: left; cursor: pointer; margin-top: 6px;
+               background: rgba(255,255,255,.05); color: var(--text);
+               border: 1px solid var(--line); border-radius: 9px;
+               padding: 9px 11px; font: inherit;
+               transition: background .12s, border-color .12s; }
+  .pick .opt:hover { background: rgba(224,163,64,.14); border-color: var(--amber); }
+  .pick .opt .nm  { font-weight: 600; font-size: 12px; }
+  .pick .opt .vl  { margin-left: auto; color: var(--dim); font-size: 11px;
+                    font-family: ui-monospace, Menlo, monospace;
+                    font-variant-numeric: tabular-nums; }
+
   /* One confirmation for a whole batch widens the blast radius, so the batch has
      to be visible. A list you can't see is a list you can't refuse. */
   .batch { margin-top: 9px; max-height: 150px; overflow-y: auto;
@@ -389,12 +406,34 @@
     </div>`;
   };
 
+  // "Buy one share of Micron" — in WHICH account? Snappy doesn't decide that. It
+  // shows every account you could trade in and waits for a click. Nothing is priced
+  // until you pick: the preview has to be run against a real account, so there is no
+  // honest number to show you before then.
+  const chooseHTML = (c) => `
+    <div class="trade pick">
+      <div class="top">
+        <span class="act">${esc(c.action)}</span>
+        <span class="sym">${esc(c.symbol)}</span>
+        <span class="qty">${c.units} share${c.units == 1 ? '' : 's'}</span>
+      </div>
+      <div class="of" style="margin-bottom:8px">Which account?</div>
+      ${c.accounts.map(a => `
+        <button class="opt" data-account="${esc(a.account_id)}">
+          <span class="nm">${esc(a.label)}</span>
+          <span class="vl">${money((a.total_value || {}).amount)}</span>
+        </button>`).join('')}
+      <div class="row2" style="margin-top:8px">
+        <button class="no" id="btnNo" style="flex:1">Dismiss</button>
+      </div>
+    </div>`;
+
   window.setState = (s) => {
     document.body.dataset.status = s.status;
     document.body.dataset.hotkey = s.hotkey_ok === false ? 'off' : 'on';
     document.getElementById('statusText').textContent = {
       idle: 'Ready', listening: 'Listening', thinking: 'Working',
-      answered: 'Ready', confirming: 'Confirm?',
+      answered: 'Ready', confirming: 'Confirm?', choosing: 'Which account?',
     }[s.status] || 'Ready';
 
     document.getElementById('value').textContent = money(s.total_value);
@@ -405,6 +444,7 @@
     const parts = [];
 
     if (s.notice) parts.push(`<div class="notice">${esc(s.notice)}</div>`);
+    if (s.choose) parts.push(chooseHTML(s.choose));
     if (s.pending) parts.push(tradeHTML(s.pending, s.total_value));
     if (live) parts.push(turnHTML(s, s.status === 'thinking'));
     for (const h of s.history) parts.push(turnHTML(h, false));
@@ -440,6 +480,12 @@
     const no = document.getElementById('btnNo');
     if (go) go.onclick = () => send({type: 'confirm'});
     if (no) no.onclick = () => send({type: 'cancel'});
+
+    // Picking an account is not the same as agreeing to the trade — this only says
+    // WHERE. The confirm card comes next, priced, and still has to be accepted.
+    for (const b of feed.querySelectorAll('[data-account]')) {
+      b.onclick = () => send({type: 'account', account_id: b.dataset.account});
+    }
   };
 </script>
 </body>

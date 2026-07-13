@@ -203,6 +203,7 @@ class Snappy(rumps.App):
         """Take over the status-item click, and start listening for ⌥."""
         ui.set_on_ask(self.ask_text)
         ui.set_on_trade(self.confirm_from_panel, self.cancel_from_panel)
+        ui.set_on_account(self.account_from_panel)
 
         item = self._nsapp.nsstatusitem
         self.menu_ref = item.menu()  # keep it; we re-attach it for right-clicks
@@ -463,6 +464,14 @@ class Snappy(rumps.App):
         state.update(status="answered")
         self.refresh_portfolio()
 
+        # Claude may have asked to trade without saying WHERE. It is not allowed to
+        # choose, and neither are we — the panel offers the accounts and the user
+        # clicks one. A click is the one input that cannot be mis-heard.
+        choice = trading.choosing()
+        if choice:
+            state.update(choose=choice, status="choosing")
+            return
+
         # Claude may have PROPOSED a trade. It cannot place one. Show the card and
         # WAIT — the user decides when to answer, and how. Snappy does not open the
         # microphone to hurry them along.
@@ -546,9 +555,37 @@ class Snappy(rumps.App):
     def cancel_from_panel(self):
         print(f"cancel button: pending={trading.pending() is not None}")
         self.abort_recording()
+        trading.clear_choice()          # dismissing also drops an unpicked account
+        state.update(choose=None)
         threading.Thread(
             target=self.resolve_trade, args=(False, "cancel"), daemon=True
         ).start()
+
+    def account_from_panel(self, account_id):
+        """The user picked an account. Price the trade in it and show the confirm card.
+
+        This is a second gate, not a shortcut past the first: choose_account() runs the
+        full guard chain, and the order still has to be confirmed afterwards. Picking
+        WHERE is not the same as saying YES.
+        """
+        print(f"account picked: {account_id}")
+        self.abort_recording()
+        state.update(choose=None, status="thinking")
+        threading.Thread(target=self._price_in, args=(account_id,), daemon=True).start()
+
+    def _price_in(self, account_id):
+        try:
+            order = trading.choose_account(account_id)
+        except (trading.TradeRefused, st.AmbiguousAccount) as e:
+            state.update(status="answered")
+            notify(str(e))
+            return
+        except Exception as e:
+            print("ERROR pricing the order:", e)
+            state.update(status="answered")
+            notify("I couldn't price that order. Nothing was placed.")
+            return
+        state.update(pending=order, status="confirming")
 
 
 def _build():

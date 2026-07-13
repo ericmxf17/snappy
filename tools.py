@@ -344,6 +344,11 @@ def _preview_trade(action, symbol, units, account=None):
     """
     try:
         return trading.propose(action, symbol, units, account=account)
+    except trading.AccountNeeded as e:
+        # Not a refusal — a question, and the PANEL asks it. Claude's job here is to
+        # say "which account?" and stop; the user answers by clicking, which is the
+        # one input that cannot be mis-heard.
+        return f"Needs an account: {e}"
     except (trading.TradeRefused, st.AmbiguousAccount) as e:
         return f"Refused: {e}"
 

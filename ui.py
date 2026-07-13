@@ -26,6 +26,7 @@ _ready = False  # the page must finish loading before JS can be pushed
 _on_ask = None
 _on_confirm = None
 _on_cancel = None
+_on_account = None
 
 # Where the user dragged the panel to. Once they've moved it, that's where it
 # belongs — show() must stop hauling it back to the corner.
@@ -131,6 +132,10 @@ class _Bridge(NSObject):
         elif kind == "cancel":
             if _on_cancel:
                 _on_cancel()
+        elif kind == "account":  # picked which account the trade goes in
+            account_id = (body.get("account_id") or "").strip()
+            if account_id and _on_account:
+                _on_account(account_id)
         elif kind == "close":  # the ✕, or Escape
             hide()
 
@@ -150,6 +155,12 @@ def set_on_trade(confirm, cancel):
     """The Confirm / Cancel buttons on a proposed trade."""
     global _on_confirm, _on_cancel
     _on_confirm, _on_cancel = confirm, cancel
+
+
+def set_on_account(callback):
+    """callback(account_id) — fired when the user picks which account to trade in."""
+    global _on_account
+    _on_account = callback
 
 
 def _corner():

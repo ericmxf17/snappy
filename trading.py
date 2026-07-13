@@ -63,6 +63,7 @@ _NO = re.compile(
 )
 
 _pending = None  # at most one proposed order, ever
+_choice = None   # a trade parked while the user picks which account it goes in
 
 
 class TradeRefused(RuntimeError):
@@ -243,16 +244,62 @@ def propose_cancel_all(symbol=None, account=None):
     return dict(_pending)
 
 
+class AccountNeeded(Exception):
+    """The user asked to trade but never said WHERE, and they have several accounts.
+
+    Not an error — a question. Snappy used to answer it by silently taking the first
+    account, which is the same class of mistake as guessing the ticker: it produces no
+    error anywhere, and the shares simply appear somewhere the user did not choose.
+
+    The proposal is parked (see choosing()) and the panel offers the accounts to pick
+    from. Nothing is priced or previewed until one is chosen — get_order_impact needs
+    an account, so there is no honest preview to show before that.
+    """
+
+    def __init__(self, accounts, action, symbol, units):
+        self.accounts, self.action, self.symbol, self.units = accounts, action, symbol, units
+        super().__init__(
+            f"You have {len(accounts)} accounts and didn't say which one. "
+            f"Ask which account to {action.lower()} {units:g} {symbol.upper()} in — "
+            "the panel is showing them a picker. Do not choose for them."
+        )
+
+
+def choosing():
+    """The trade waiting on an account choice, if any."""
+    return dict(_choice) if _choice else None
+
+
+def clear_choice():
+    global _choice
+    _choice = None
+
+
+def choose_account(account_id):
+    """The user picked an account from the panel. NOW price it.
+
+    Takes an account_id straight from the list we showed them — the one thing that
+    cannot be mis-heard. This runs the full guard chain like any other proposal; it is
+    not a back door.
+    """
+    global _choice
+
+    if _choice is None:
+        raise TradeRefused("I don't have a trade waiting on an account. Ask me again.")
+
+    want = _choice
+    _choice = None
+    return propose(want["action"], want["symbol"], want["units"], account=account_id)
+
+
 def propose(action, symbol, units, account=None):
     """Run the guards and ask the brokerage what this order would do. Places nothing.
 
-    account is whatever the user SAID ("my second account", "Alpaca", "...8AUQ"), or
-    None for their default account. The guards run against the account the shares
-    would actually land in — see check_account.
+    account is whatever the user SAID ("my second account", "Alpaca", "...8AUQ"). If
+    they didn't say and they have more than one account, this raises AccountNeeded
+    rather than picking — see that class.
     """
-    global _pending
-
-    target = check_account(account)
+    global _pending, _choice
 
     action = action.upper()
     if action not in ("BUY", "SELL"):
@@ -261,6 +308,34 @@ def propose(action, symbol, units, account=None):
     units = float(units)
     if units <= 0:
         raise TradeRefused("That's not a number of shares I can trade.")
+
+    if account is None:
+        # Only the accounts we could ACTUALLY trade in are candidates. Offering one we
+        # would then refuse is a trap — the user clicks it and gets told no.
+        tradeable = [a for a in st.list_accounts() if config.ALLOW_LIVE_TRADING or a["is_paper"]]
+
+        if not tradeable:
+            raise TradeRefused(
+                "I can only trade in a paper account, and I don't see one connected. "
+                "I won't place orders with real money."
+            )
+
+        if len(tradeable) > 1:
+            _choice = {
+                "action": action,
+                "symbol": symbol.upper(),
+                "units": units,
+                "accounts": tradeable,
+                "proposed_at": time.monotonic(),
+            }
+            raise AccountNeeded(tradeable, action, symbol, units)
+
+        # Exactly one candidate: there is nothing to ask about. NOT the same as "the
+        # first account" — that fell over the moment a real-money account sorted first,
+        # refusing the trade outright while a perfectly good paper account sat behind it.
+        account = tradeable[0]["account_id"]
+
+    target = check_account(account)
 
     try:
         preview = st.preview_trade(action, symbol, units, account_id=target["account_id"])
@@ -335,8 +410,9 @@ def is_cancellation(text):
 
 
 def cancel():
-    global _pending
+    global _pending, _choice
     _pending = None
+    _choice = None   # a dismissed trade must not leave a half-made one behind
 
 
 def confirm():
