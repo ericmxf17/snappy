@@ -65,6 +65,17 @@ _USER = {
 }
 
 
+def _hours_since(timestamp):
+    """Hours since an ISO timestamp, or None if it can't be read."""
+    if not timestamp:
+        return None
+    try:
+        then = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round((datetime.now(timezone.utc) - then).total_seconds() / 3600, 1)
+
+
 @_cached(20)
 def list_accounts():
     """All connected brokerage accounts.
@@ -83,6 +94,14 @@ def list_accounts():
     out = []
     for i, a in enumerate(accounts, start=1):
         number = a.get("number") or ""
+
+        # SnapTrade tells you when it last pulled holdings — and it can be hours old
+        # while still reporting initial_sync_completed: true. On 13 Jul 2026 this read
+        # 14 hours, which is to say "before the market opened", which is to say every
+        # position from that morning was missing and nothing in the API said so.
+        holdings_sync = ((a.get("sync_status") or {}).get("holdings") or {})
+        synced_at = holdings_sync.get("last_successful_sync")
+
         out.append(
             {
                 "account_id": a.get("id"),
@@ -94,6 +113,8 @@ def list_accounts():
                 "label": f"{a.get('institution_name') or a.get('name')} ...{number[-4:]}",
                 "ordinal": i,  # "my first account", "the second one"
                 "total_value": (a.get("balance") or {}).get("total"),
+                "holdings_synced_at": synced_at,
+                "holdings_sync_hours_ago": _hours_since(synced_at),
             }
         )
     return out
@@ -406,12 +427,19 @@ def get_portfolio_summary(account_id=None):
     except Exception:
         stale = []
     if stale:
+        account = next(
+            (a for a in list_accounts() if a["account_id"] == account_id), {}
+        )
+        hours = account.get("holdings_sync_hours_ago")
+        age = f" SnapTrade last synced holdings {hours} hours ago." if hours else ""
+
         summary["unsynced_fills"] = stale
+        summary["holdings_synced_at"] = account.get("holdings_synced_at")
         summary["stale_note"] = (
             "Your brokerage has FILLED these, but SnapTrade hasn't synced them into "
             "positions yet, so they are NOT in the holdings or the weights above. The "
-            "user owns them. Say so plainly, and say the totals are understated until "
-            "the sync catches up. Do NOT tell them they own nothing."
+            f"user owns them.{age} Say so plainly, and say the totals are understated "
+            "until the sync catches up. Do NOT tell them they own nothing."
         )
 
     return summary

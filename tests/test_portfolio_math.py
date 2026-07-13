@@ -120,6 +120,13 @@ def _stub(monkeypatch, positions, orders):
     monkeypatch.setattr(st, "get_positions", lambda account_id=None: positions)
     monkeypatch.setattr(st, "get_orders", lambda open_only=False, account_id=None: orders)
     monkeypatch.setattr(st, "_default_account_id", lambda: "acct-1")
+    monkeypatch.setattr(st, "list_accounts", lambda: [{
+        "account_id": "acct-1", "label": "Alpaca Paper ...0001", "is_paper": True,
+        "connection_id": "c1", "institution": "Alpaca Paper", "name": "Alpaca Paper",
+        "number": "PA0001", "ordinal": 1, "total_value": 10_000,
+        "holdings_synced_at": "2026-07-13T00:04:42+00:00",
+        "holdings_sync_hours_ago": 14.4,
+    }])
     return st
 
 
