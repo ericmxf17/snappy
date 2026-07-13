@@ -138,6 +138,11 @@
   .num { text-align: right; font-family: ui-monospace, Menlo, monospace;
          font-variant-numeric: tabular-nums; }
   .wt { color: var(--dim); }
+  /* A position split across accounts. Amber because it's the finding, not a footnote:
+     each brokerage shows you half of it and calls that the whole. */
+  .split { margin-left: 6px; font-size: 9px; font-weight: 600; letter-spacing: .06em;
+           color: var(--amber); border: 1px solid rgba(224,163,64,.35);
+           border-radius: 3px; padding: 1px 4px; vertical-align: 1px; }
 
   .hint { color: var(--dim); font-size: 12px; line-height: 1.9; text-align: center; }
   kbd { background: rgba(255,255,255,.10); border: 1px solid var(--line); border-radius: 4px;
@@ -450,10 +455,13 @@
     for (const h of s.history) parts.push(turnHTML(h, false));
 
     if (s.positions.length) {
+      // held_in > 1 is the number no single brokerage can show you: the same stock,
+      // split across accounts, looking small twice.
       parts.push(`<div class="card">
-        <div class="hd">Holdings</div>
+        <div class="hd">Holdings · all accounts</div>
         <table>${s.positions.map(p => `<tr>
-          <td class="sym">${esc(p.symbol)}</td>
+          <td class="sym">${esc(p.symbol)}${
+            p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}</td>
           <td class="num wt">${p.units}</td>
           <td class="num">${money(p.market_value)}</td>
           <td class="num wt">${p.weight_pct}%</td>

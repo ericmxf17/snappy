@@ -14,6 +14,7 @@ Run with:  ./venv/bin/python main.py
 import os
 import subprocess
 import threading
+import time
 
 import AppKit
 import objc
@@ -193,6 +194,7 @@ class Snappy(rumps.App):
         rumps.Timer(self.tick, 0.15).start()
         rumps.Timer(self.tick_level, 0.05).start()  # waveform wants ~20fps
         threading.Thread(target=self.refresh_portfolio, daemon=True).start()
+        threading.Thread(target=self.keep_fresh, daemon=True).start()
         # Load Whisper off the main thread so launch is instant and the first
         # question doesn't pay for the model load either.
         threading.Thread(target=transcribe.warm, daemon=True).start()
@@ -279,12 +281,23 @@ class Snappy(rumps.App):
         """State snapshot plus the bits only the panel cares about."""
         s = state.snapshot()
         positions = s["positions"]
+        count = s.get("account_count") or 1
+        where = f"{count} accounts" if count > 1 else "Alpaca Paper"
+
         if positions:
-            sub = f"{len(positions)} holding{'s' if len(positions) > 1 else ''} · Alpaca Paper"
+            sub = f"{len(positions)} holding{'s' if len(positions) > 1 else ''} · {where}"
         elif s["cash"]:
-            sub = "100% cash · Alpaca Paper"
+            sub = f"100% cash · {where}"
         else:
-            sub = "Alpaca Paper"
+            sub = where
+
+        # Shares the brokerage has filled that SnapTrade hasn't synced. Saying nothing
+        # would leave the headline number quietly understated with no hint why.
+        stale = s.get("unsynced") or []
+        if stale:
+            symbols = ", ".join(sorted({g["symbol"] for g in stale}))
+            sub += f" · {symbols} filled, not yet synced"
+
         return {**s, "sub": sub}
 
     def set_icon(self, status):
@@ -303,19 +316,43 @@ class Snappy(rumps.App):
         button.setTitle_("")
 
     def refresh_portfolio(self):
+        """The headline number: net worth across EVERY account, not just the first one.
+
+        This used to call get_portfolio_summary() with no account, which quietly means
+        "the first account". So the panel showed $100,000 for someone whose net worth was
+        $150,000 across two brokerages — a multi-brokerage app displaying a single
+        brokerage, which is the exact failure the whole project claims to fix.
+        """
         try:
-            p = st.get_portfolio_summary()
+            book = st.get_all_holdings()
             state.update(
-                total_value=p["total_portfolio_value"],
-                cash=p["cash"],
-                positions=p["positions"],
+                total_value=book["net_worth"],
+                cash=book["total_cash"],
+                positions=book["combined_holdings"],
+                account_count=book["account_count"],
+                unsynced=[
+                    gap
+                    for a in book["accounts"]
+                    for gap in (a.get("unsynced_fills") or [])
+                ],
             )
-            # Prime the transcriber with the tickers you actually hold. Whisper
-            # guesses from context, so knowing you own NVDA is the difference
-            # between hearing "Nvidia" and hearing "and video".
-            transcribe.set_hints([pos["symbol"] for pos in p["positions"]])
+            # Prime the transcriber with the tickers you actually hold. Whisper guesses
+            # from context, so knowing you own NVDA is the difference between hearing
+            # "Nvidia" and hearing "and video".
+            transcribe.set_hints([p["symbol"] for p in book["combined_holdings"]])
         except Exception as e:
             print("portfolio refresh failed:", e)
+
+    def keep_fresh(self):
+        """Re-read the portfolio every 60s, so the panel isn't quoting a stale number.
+
+        It used to refresh only at startup, after an answer, and after a trade — so the
+        balance on screen could be an hour old and look perfectly current. A number with
+        no timestamp that never changes is indistinguishable from a number that is right.
+        """
+        while True:
+            time.sleep(60)
+            self.refresh_portfolio()
 
     # --- triggers ----------------------------------------------------------
 
