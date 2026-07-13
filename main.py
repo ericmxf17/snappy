@@ -330,6 +330,21 @@ class Snappy(rumps.App):
                 cash=book["total_cash"],
                 positions=book["combined_holdings"],
                 account_count=book["account_count"],
+                # Per-account contents, for the expandable Accounts card. The combined
+                # view answers "what do I own"; this one answers "and where is it".
+                accounts=[
+                    {
+                        "account_id": a["account_id"],
+                        "label": a["label"],
+                        "cash": a.get("cash"),
+                        "holdings_value": a.get("holdings_value"),
+                        "total_value": (a.get("total_value") or {}).get("amount"),
+                        "positions": a.get("positions") or [],
+                        "unsynced_fills": a.get("unsynced_fills") or [],
+                        "error": a.get("error"),
+                    }
+                    for a in book["accounts"]
+                ],
                 unsynced=[
                     gap
                     for a in book["accounts"]

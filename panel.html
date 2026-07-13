@@ -167,6 +167,32 @@
            color: var(--amber); border: 1px solid rgba(224,163,64,.35);
            border-radius: 3px; padding: 1px 4px; vertical-align: 1px; }
 
+  /* ---- accounts, expandable ---------------------------------------------
+     "What do I own" is the combined table. This answers "and where is it". */
+  .acct { border-top: 1px solid var(--line); }
+  .acct:first-of-type { border-top: 0; }
+  .acct > .hdr {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: none; border: 0; padding: 9px 0; cursor: pointer;
+    color: var(--text); font: inherit; text-align: left;
+  }
+  .acct > .hdr:hover .nm { color: var(--amber); }
+  .acct > .hdr:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
+  .acct .caretx { color: var(--faint); font-size: 9px; width: 8px; flex: none;
+                  transition: transform .15s ease; }
+  .acct.open .caretx { transform: rotate(90deg); }
+  .acct .nm { font-size: 12px; font-weight: 600; transition: color .12s; }
+  .acct .amt { margin-left: auto; font-size: 12px;
+               font-family: ui-monospace, Menlo, monospace;
+               font-variant-numeric: tabular-nums; color: var(--dim); }
+  .acct .body { display: none; padding: 2px 0 10px 16px; }
+  .acct.open .body { display: block; }
+  .acct .body .cashrow { display: flex; font-size: 11px; color: var(--faint);
+                         padding: 3px 0; border-top: 1px solid var(--line); margin-top: 4px; }
+  .acct .body .cashrow span:last-child { margin-left: auto;
+                                         font-family: ui-monospace, Menlo, monospace; }
+  .acct .empty { font-size: 11px; color: var(--faint); padding: 3px 0; }
+
   .hint { color: var(--dim); font-size: 12px; line-height: 1.9; text-align: center; }
   kbd { background: rgba(255,255,255,.10); border: 1px solid var(--line); border-radius: 4px;
         padding: 1px 5px; font: 11px ui-monospace, Menlo, monospace; color: var(--text); }
@@ -463,6 +489,37 @@
   let lastRead = null;    // epoch seconds of the last real portfolio read
   let lastValue = null;   // to flash the number only when it actually moves
 
+  // Which account rows the user has opened. The feed is rebuilt from scratch on EVERY
+  // push — including the 30s background refresh — so without this an expanded account
+  // would snap shut under the user's cursor a few seconds after they opened it.
+  const openAccounts = new Set();
+
+  const accountRowHTML = (a) => `
+    <div class="acct ${openAccounts.has(a.account_id) ? 'open' : ''}">
+      <button class="hdr" data-acct="${esc(a.account_id)}"
+              aria-expanded="${openAccounts.has(a.account_id)}">
+        <span class="caretx">▶</span>
+        <span class="nm">${esc(a.label)}</span>
+        <span class="amt">${money(a.total_value)}</span>
+      </button>
+      <div class="body">
+        ${a.error ? `<div class="empty">Couldn't read this account: ${esc(a.error)}</div>`
+          : a.positions.length
+            ? `<table>${a.positions.map(p => `<tr>
+                 <td class="sym">${esc(p.symbol)}</td>
+                 <td class="num wt">${p.units}</td>
+                 <td class="num">${money((p.units || 0) * (p.price || 0))}</td>
+               </tr>`).join('')}</table>`
+            : `<div class="empty">No positions.</div>`}
+        ${(a.unsynced_fills || []).length
+          ? `<div class="empty" style="color:var(--amber)">
+               ${a.unsynced_fills.map(g => `${g.missing_units} ${esc(g.symbol)}`).join(', ')}
+               filled, not yet synced by SnapTrade
+             </div>` : ''}
+        <div class="cashrow"><span>Cash</span><span>${money(a.cash)}</span></div>
+      </div>
+    </div>`;
+
   const drawFresh = () => {
     const el = document.getElementById('fresh');
     if (!el) return;
@@ -532,6 +589,15 @@
       </div>`);
     }
 
+    // Where the money actually is. Only worth showing when there's more than one
+    // account — with one, it's just the holdings table again with extra clicks.
+    if ((s.accounts || []).length > 1) {
+      parts.push(`<div class="card">
+        <div class="hd">Accounts</div>
+        ${s.accounts.map(accountRowHTML).join('')}
+      </div>`);
+    }
+
     if (!parts.length) {
       parts.push(`<div class="card hint">
         <span class="opt">Hold <kbd>⌥</kbd>, speak, let go.</span> Or type below.<br>
@@ -556,6 +622,18 @@
     // WHERE. The confirm card comes next, priced, and still has to be accepted.
     for (const b of feed.querySelectorAll('[data-account]')) {
       b.onclick = () => send({type: 'account', account_id: b.dataset.account});
+    }
+
+    // Expanding an account is purely local — no round-trip to Python, and nothing to
+    // wait for. The Set is what survives the next re-render.
+    for (const b of feed.querySelectorAll('[data-acct]')) {
+      b.onclick = () => {
+        const id = b.dataset.acct;
+        const open = !openAccounts.has(id);
+        open ? openAccounts.add(id) : openAccounts.delete(id);
+        b.parentElement.classList.toggle('open', open);
+        b.setAttribute('aria-expanded', String(open));
+      };
     }
   };
 </script>

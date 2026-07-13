@@ -20,6 +20,7 @@ STATE = {
     "total_value": None,
     "cash": None,
     "positions": [],
+    "accounts": [],  # per-account contents, for the expandable Accounts card
     "account_count": 1,  # >1 → the panel stops naming a single brokerage
     "updated_at": None,  # when the portfolio was last actually re-read
     "unsynced": [],  # filled at the brokerage, not yet in SnapTrade's positions
