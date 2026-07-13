@@ -20,10 +20,17 @@ _panel = None
 _webview = None
 _delegate = None  # keep strong refs; PyObjC won't retain these for us
 _bridge = None
+_watch = None
+_drag = None
 _ready = False  # the page must finish loading before JS can be pushed
 _on_ask = None
 _on_confirm = None
 _on_cancel = None
+
+# Where the user dragged the panel to. Once they've moved it, that's where it
+# belongs — show() must stop hauling it back to the corner.
+_origin = None
+_moving_it_ourselves = False
 
 
 class _Panel(AppKit.NSPanel):
@@ -37,6 +44,40 @@ class _Panel(AppKit.NSPanel):
 
     def canBecomeKeyWindow(self):
         return True
+
+
+class _DragStrip(AppKit.NSView):
+    """An invisible grab handle over the panel's header, so it can be dragged.
+
+    It has to be a separate view. Making the WEB VIEW draggable would mean every
+    mouse-down in the page starts a window drag instead of reaching the page — which
+    is the exact bug that made the Confirm button dead for hours. So the drag area is
+    a transparent strip sitting on top of the header, deliberately stopping short of
+    the ✕ so that button still gets its clicks.
+    """
+
+    def mouseDownCanMoveWindow(self):
+        return True
+
+    def hitTest_(self, point):
+        # Claim header drags, but never swallow a click meant for the page.
+        return self if self.isMousePoint_inRect_(
+            self.convertPoint_fromView_(point, self.superview()), self.bounds()
+        ) else None
+
+    def resetCursorRects(self):
+        # An open hand over the header — otherwise nobody discovers it's draggable.
+        self.addCursorRect_cursor_(self.bounds(), AppKit.NSCursor.openHandCursor())
+
+
+class _WindowWatch(NSObject):
+    """Remembers where the user put the panel."""
+
+    def windowDidMove_(self, notification):
+        global _origin
+        if _moving_it_ourselves:
+            return  # our own repositioning isn't the user expressing a preference
+        _origin = _panel.frame().origin
 
 
 class _WebView(WebKit.WKWebView):
@@ -139,7 +180,7 @@ def _corner():
 
 def create():
     """Build the panel. Must run on the main thread, after NSApplication exists."""
-    global _panel, _webview, _delegate, _bridge
+    global _panel, _webview, _delegate, _bridge, _watch, _drag
 
     x, y = _corner()
 
@@ -197,7 +238,20 @@ def create():
     )
 
     blur.addSubview_(_webview)
+
+    # Added AFTER the web view, so it sits on top and gets the header's mouse-downs.
+    # Stops 46px short of the right edge — that's the ✕, and it needs its clicks.
+    STRIP_H = 38
+    _drag = _DragStrip.alloc().initWithFrame_(
+        NSMakeRect(0, HEIGHT - STRIP_H, WIDTH - 46, STRIP_H)
+    )
+    _drag.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewMinYMargin)
+    blur.addSubview_(_drag)
+
     _panel.setContentView_(blur)
+
+    _watch = _WindowWatch.alloc().init()
+    _panel.setDelegate_(_watch)
 
     _panel.setAlphaValue_(0.0)  # faded in by show()
     show()
@@ -231,10 +285,15 @@ def focus_composer():
 
 
 def show():
-    """Fade in at the top-right of whatever screen the mouse is on."""
+    """Fade in — where the user last dragged it, or the corner if they never have."""
+    global _moving_it_ourselves
     if _panel is None:
         return
-    _panel.setFrameOrigin_(_corner())
+
+    _moving_it_ourselves = True          # don't mistake this for the user moving it
+    _panel.setFrameOrigin_(_origin if _origin is not None else _corner())
+    _moving_it_ourselves = False
+
     _panel.orderFrontRegardless()
 
     AppKit.NSAnimationContext.beginGrouping()
