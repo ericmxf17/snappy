@@ -27,6 +27,21 @@ class Body:
         self.body = body
 
 
+@pytest.fixture(autouse=True)
+def _no_cache_between_tests():
+    """The wrapper memoises its reads for 20s. Tests run in milliseconds.
+
+    Without this, one test's fake portfolio is still cached when the next one asks —
+    so a test that stubs an empty account gets served the previous test's $30,000.
+    The cache is doing exactly its job; it just must not span tests.
+    """
+    import snaptrade_client_wrapper as st
+
+    st.invalidate()
+    yield
+    st.invalidate()
+
+
 @pytest.fixture
 def state_reset():
     """state.STATE is module-level and shared; give each test a clean one."""

@@ -4,6 +4,8 @@ Each function returns plain dicts/lists (not SDK response objects) so the result
 can be handed straight to Claude as tool output.
 """
 
+import functools
+import time
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -14,12 +16,56 @@ _client = SnapTrade(
     consumer_key=config.SNAPTRADE_CONSUMER_KEY,
 )
 
+
+def _cached(seconds):
+    """Memoise a read for a few seconds. Reads only — never a mutation.
+
+    Answering one question walks the same ground repeatedly: Claude asked for the
+    portfolio twice and the account list twice while buying a single share, and each
+    repeat was a real round-trip that the user sat and waited through.
+
+    The window is deliberately short. It has to survive one question, not outlive the
+    facts — a stale balance is a wrong denominator, and the denominator is what every
+    "how would this fit?" answer is built on. Any order Snappy places clears it.
+    """
+    def wrap(fn):
+        hits = {}
+
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            hit = hits.get(key)
+            now = time.monotonic()
+            if hit and now - hit[0] < seconds:
+                return hit[1]
+            value = fn(*args, **kwargs)
+            hits[key] = (now, value)
+            return value
+
+        inner.forget = hits.clear
+        return inner
+
+    return wrap
+
+
+def invalidate():
+    """Drop every cached read. Called after anything that changes the account.
+
+    Tolerates a function that isn't cached: tests replace these with plain stubs, and a
+    cache flush is never important enough to take the trade down with it.
+    """
+    for fn in (list_accounts, get_account_balance, get_positions, get_orders):
+        forget = getattr(fn, "forget", None)
+        if forget:
+            forget()
+
 _USER = {
     "user_id": config.SNAPTRADE_USER_ID,
     "user_secret": config.SNAPTRADE_USER_SECRET,
 }
 
 
+@_cached(20)
 def list_accounts():
     """All connected brokerage accounts.
 
@@ -131,6 +177,7 @@ def resolve_account(hint=None):
     raise AmbiguousAccount(hint, accounts)
 
 
+@_cached(20)
 def get_account_balance(account_id=None):
     """Cash and buying power for one account."""
     account_id = account_id or _default_account_id()
@@ -147,6 +194,7 @@ def get_account_balance(account_id=None):
     ]
 
 
+@_cached(20)
 def get_positions(account_id=None):
     """Current equity holdings for one account."""
     account_id = account_id or _default_account_id()
@@ -340,17 +388,36 @@ def preview_trade(action, symbol, units, account_id=None):
     ).body
 
     trade = dict(impact.get("trade") or {})
-    return {
+    cost = round(float(units) * (resolved["price"] or 0), 2)
+
+    # The portfolio context comes back WITH the preview, so Claude doesn't have to make
+    # a second round-trip for it. It was calling get_portfolio_summary before every
+    # preview — each call a full turn through the model — and the user sat watching a
+    # spinner for the privilege. The reads underneath are cached, so this is nearly free.
+    out = {
         "trade_id": trade.get("id"),
         "action": action.upper(),
         "symbol": resolved["symbol"],
         "description": resolved["description"],
         "units": float(units),
         "price": resolved["price"],
-        "estimated_cost": round(float(units) * (resolved["price"] or 0), 2),
+        "estimated_cost": cost,
         "estimated_commission": impact.get("estimated_commission"),
         "remaining_cash": impact.get("remaining_cash"),
     }
+    try:
+        summary = get_portfolio_summary(account_id)
+        total = summary["total_portfolio_value"]
+        out["portfolio_value"] = total
+        out["pct_of_portfolio"] = round(100 * cost / total, 2) if total else None
+        out["cash_after"] = summary["cash"] - cost if action.upper() == "BUY" else None
+        out["already_held"] = next(
+            (p["units"] for p in summary["positions"] if p["symbol"] == resolved["symbol"]),
+            0,
+        )
+    except Exception:
+        pass  # a missing weight is a smaller problem than a preview that won't render
+    return out
 
 
 def place_previewed_trade(trade_id):
@@ -386,6 +453,7 @@ def _num(v):
         return None
 
 
+@_cached(20)
 def get_orders(open_only=False, account_id=None):
     """Orders and their fill status.
 

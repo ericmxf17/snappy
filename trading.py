@@ -436,6 +436,11 @@ def confirm():
 
     _pending = None            # burn it first: a retry must never double-fill
 
+    # Whatever happens next changes the account, so the cached reads are now lies.
+    # Drop them before the order goes out, not after — a failure partway through still
+    # leaves the world different from what we last read.
+    st.invalidate()
+
     kind = order.get("kind")
 
     # The account the proposal was built against. Cancelling without it would go to

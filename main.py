@@ -525,6 +525,11 @@ class Snappy(rumps.App):
                     "through — check your brokerage before trying again."
                 )
             else:
+                # Clear the card. Every FAILURE path above cleared it and the success
+                # path didn't, so a trade that actually worked left its own confirm
+                # button sitting on screen — looking exactly like nothing had happened,
+                # and inviting the user to press it again.
+                state.update(pending=None, status="answered")
                 notify(describe_fill(filled))
 
         self.refresh_portfolio()
