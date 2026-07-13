@@ -111,3 +111,75 @@ def test_fractional_shares(monkeypatch):
 
     assert s["positions"][0]["market_value"] == 150.0
     assert s["positions"][0]["weight_pct"] == 100.0
+
+
+# --- SnapTrade says EXECUTED and also says you own nothing -------------------
+
+def _stub(monkeypatch, positions, orders):
+    import snaptrade_client_wrapper as st
+    monkeypatch.setattr(st, "get_positions", lambda account_id=None: positions)
+    monkeypatch.setattr(st, "get_orders", lambda open_only=False, account_id=None: orders)
+    monkeypatch.setattr(st, "_default_account_id", lambda: "acct-1")
+    return st
+
+
+FILLED_NVDA = {"order_id": "o1", "symbol": "NVDA", "action": "BUY", "status": "EXECUTED",
+               "units": 45.0, "filled_units": 45.0, "execution_price": 210.0,
+               "order_type": "Market", "placed_at": "", "executed_at": ""}
+
+
+def test_a_filled_order_missing_from_positions_is_reported(monkeypatch):
+    """The platform bug, reproduced: EXECUTED with a fill price, and an empty account.
+
+    Observed 13 Jul 2026 — seven orders filled at the open, confirmed in Alpaca's own
+    dashboard, and SnapTrade's positions endpoint stayed empty for over 40 minutes.
+    An app that trusts positions alone tells the user they own nothing. They do not.
+    """
+    st = _stub(monkeypatch, positions=[], orders=[FILLED_NVDA])
+
+    gaps = st.unsynced_fills("acct-1")
+    assert len(gaps) == 1
+    assert gaps[0]["symbol"] == "NVDA"
+    assert gaps[0]["missing_units"] == 45.0
+    assert gaps[0]["shown_in_positions"] == 0
+
+
+def test_unsynced_shares_are_never_added_into_the_weights(monkeypatch):
+    """The trap. Merging them looks helpful and double-counts the moment the sync lands.
+
+    A confident wrong number is worse than an admitted gap, so the fills are reported
+    ALONGSIDE the positions and never folded into them.
+    """
+    st = _stub(monkeypatch, positions=[], orders=[FILLED_NVDA])
+    monkeypatch.setattr(st, "get_account_balance",
+                        lambda account_id=None: [{"currency": "USD", "cash": 10_000.0,
+                                                  "buying_power": 10_000.0}])
+
+    summary = st.get_portfolio_summary("acct-1")
+    assert summary["positions"] == [], "unsynced fills must not become positions"
+    assert summary["holdings_value"] == 0.0
+    assert summary["total_portfolio_value"] == 10_000.0, "9,450 of NVDA must NOT be added in"
+    assert summary["unsynced_fills"], "but it must still SAY the shares exist"
+    assert "own nothing" in summary["stale_note"]
+
+
+def test_a_position_bigger_than_the_orders_we_can_see_is_not_a_gap(monkeypatch):
+    """The orders endpoint may not reach back far enough to explain an old holding.
+
+    A position LARGER than the fills we can see is normal. Only fills the position
+    fails to account for are the bug — the reverse would flag every mature account.
+    """
+    st = _stub(
+        monkeypatch,
+        positions=[{"symbol": "NVDA", "units": 100.0, "price": 210.0,
+                    "description": "NVIDIA", "average_purchase_price": 200.0, "open_pnl": 0}],
+        orders=[FILLED_NVDA],   # only 45 of the 100 are explained by visible orders
+    )
+    assert st.unsynced_fills("acct-1") == []
+
+
+def test_a_sold_position_does_not_look_unsynced(monkeypatch):
+    """Buy 45, sell 45, hold nothing. That is not a missing fill."""
+    sold = {**FILLED_NVDA, "order_id": "o2", "action": "SELL"}
+    st = _stub(monkeypatch, positions=[], orders=[FILLED_NVDA, sold])
+    assert st.unsynced_fills("acct-1") == []

@@ -254,6 +254,56 @@ def get_quote(symbol, account_id=None):
     ]
 
 
+_SETTLED = ("EXECUTED", "FILLED", "COMPLETE", "COMPLETED")
+
+
+def unsynced_fills(account_id=None):
+    """Shares the brokerage says are FILLED that SnapTrade's positions don't show yet.
+
+    SnapTrade can report an order EXECUTED — with a fill quantity and an execution
+    price — while get_all_account_positions still returns an empty account. Two
+    endpoints, same account, contradicting each other. An app that trusts positions
+    alone tells the user they own nothing, which is simply false.
+
+    Only counts a symbol as missing when the FILLS EXCEED the position. The orders
+    endpoint may not reach back far enough to explain an old holding, so a position
+    larger than the fills we can see is normal and means nothing is wrong. The reverse
+    — fills we can see that the position does not account for — is the bug.
+
+    Deliberately NOT merged into positions anywhere. When the sync lands, the same
+    shares would then be counted twice: once as a position and once as an unsynced
+    fill. Reporting them side by side is honest; adding them together is a new lie
+    replacing the old one.
+    """
+    account_id = account_id or _default_account_id()
+
+    filled = {}
+    for o in get_orders(account_id=account_id):
+        if (o.get("status") or "").upper() not in _SETTLED:
+            continue
+        units = o.get("filled_units") or 0
+        if not units or not o.get("symbol"):
+            continue
+        sign = 1 if (o.get("action") or "").upper() == "BUY" else -1
+        filled[o["symbol"]] = filled.get(o["symbol"], 0) + sign * units
+
+    held = {p["symbol"]: (p["units"] or 0) for p in get_positions(account_id)}
+
+    gaps = []
+    for symbol, units in filled.items():
+        missing = units - held.get(symbol, 0)
+        if missing > 1e-6:
+            gaps.append(
+                {
+                    "symbol": symbol,
+                    "filled_units": round(units, 6),
+                    "shown_in_positions": held.get(symbol, 0),
+                    "missing_units": round(missing, 6),
+                }
+            )
+    return gaps
+
+
 def get_portfolio_summary(account_id=None):
     """Holdings with their weights, plus cash and total value.
 
@@ -329,7 +379,9 @@ def get_portfolio_summary(account_id=None):
         if committed:
             summary["cash_after_pending_fill"] = round(cash - committed, 2)
 
-    return summary
+    # An early `return summary` used to sit right here, which made every line below it
+    # unreachable — so this warning has never once fired. Dead code that fails silently
+    # is worse than no code: it looks like a guard while guarding nothing.
     if unpriced:
         summary["warning"] = (
             f"No live price for {', '.join(unpriced)}, so they are counted as $0. "
@@ -337,6 +389,31 @@ def get_portfolio_summary(account_id=None):
             f"OVERSTATED respectively. Say so rather than quoting the percentages "
             f"as if they were exact."
         )
+
+    # SnapTrade can report an order EXECUTED, with a fill price and quantity, while its
+    # positions endpoint still shows an empty account. Both statements are about the
+    # same account and they contradict each other. Observed 13 Jul 2026: seven orders
+    # filled at the open, confirmed in the brokerage's own dashboard, and positions
+    # stayed empty for over 40 minutes. refresh_brokerage_authorization — the documented
+    # way to force a re-sync — returns 403 on this tier.
+    #
+    # An app that just reads positions tells the user they own NOTHING. That is a lie
+    # the platform hands you, and it must not be passed on.
+    # A staleness CHECK that fails must not take the portfolio down with it. This is a
+    # warning layered on top of the answer, not part of it.
+    try:
+        stale = unsynced_fills(account_id)
+    except Exception:
+        stale = []
+    if stale:
+        summary["unsynced_fills"] = stale
+        summary["stale_note"] = (
+            "Your brokerage has FILLED these, but SnapTrade hasn't synced them into "
+            "positions yet, so they are NOT in the holdings or the weights above. The "
+            "user owns them. Say so plainly, and say the totals are understated until "
+            "the sync catches up. Do NOT tell them they own nothing."
+        )
+
     return summary
 
 
@@ -540,8 +617,21 @@ def get_all_holdings():
             slot["accounts"].append({"brokerage": account["institution"], "units": p["units"]})
 
         total_holdings += value
-        books.append({**account, "cash": round(cash, 2), "holdings_value": round(value, 2),
-                      "positions": positions})
+        book = {**account, "cash": round(cash, 2), "holdings_value": round(value, 2),
+                "positions": positions}
+
+        # Fills SnapTrade hasn't synced into positions yet. Kept OUT of the weights and
+        # the net worth on purpose — those are built from positions, and adding these in
+        # would double-count every share the moment the sync lands. Reported alongside,
+        # so the answer can be honest about what is missing rather than silently short.
+        try:
+            stale = unsynced_fills(aid)
+        except Exception:
+            stale = []
+        if stale:
+            book["unsynced_fills"] = stale
+
+        books.append(book)
 
     net_worth = total_cash + total_holdings
     for slot in combined.values():
@@ -570,7 +660,23 @@ def find_overlap():
     book = get_all_holdings()
     doubled = [h for h in book["combined_holdings"] if h["held_in"] > 1]
 
-    return {
+    # Overlap is computed from POSITIONS, so a symbol SnapTrade hasn't synced yet is
+    # invisible to it. On 13 Jul 2026 that meant NVDA was filled in two accounts and
+    # find_overlap reported "no overlap" — the exact answer the tool exists to refute.
+    #
+    # The unsynced fills are surfaced rather than folded in: folding them in would
+    # double-count the moment the sync lands, and a confident wrong number is worse than
+    # an admitted gap. Here it is enough to say the answer is INCOMPLETE and why.
+    stale = {}
+    for account in book["accounts"]:
+        for gap in account.get("unsynced_fills") or []:
+            slot = stale.setdefault(gap["symbol"], {"symbol": gap["symbol"], "units": 0.0, "accounts": []})
+            slot["units"] += gap["missing_units"]
+            slot["accounts"].append(account["label"])
+
+    unsynced_overlap = [s for s in stale.values() if len(s["accounts"]) > 1]
+
+    result = {
         "net_worth": book["net_worth"],
         "account_count": book["account_count"],
         "overlapping": doubled,
@@ -584,6 +690,22 @@ def find_overlap():
             )
         ),
     }
+
+    if stale:
+        result["unsynced_fills"] = list(stale.values())
+        result["stale_note"] = (
+            "INCOMPLETE. These shares are FILLED at the brokerage but SnapTrade has not "
+            "synced them into positions, so the overlap above does not account for them. "
+            + (
+                f"{', '.join(s['symbol'] for s in unsynced_overlap)} is filled in MORE THAN "
+                "ONE account — that IS cross-account overlap, it simply isn't visible in "
+                "positions yet. Say so."
+                if unsynced_overlap
+                else "Say the answer is incomplete until the sync catches up."
+            )
+        )
+
+    return result
 
 
 def search_symbols(query, account_id=None):

@@ -73,6 +73,13 @@ the last four of the account number.
 - Portfolio questions: prefer get_all_holdings and find_overlap. The real answer to "how much \
 Nvidia do I own" is the total ACROSS accounts, and neither brokerage can see that number. It \
 is the whole reason this app exists.
+- STALE DATA. SnapTrade sometimes reports an order EXECUTED — with a fill price and quantity — \
+while its positions endpoint still shows an empty account. When a tool returns "unsynced_fills", \
+the user OWNS those shares; SnapTrade just hasn't caught up. NEVER tell them they own nothing \
+when unsynced fills are present. Say what they hold, say the totals and weights are understated \
+until the sync lands, and say plainly that this is SnapTrade lagging — not their brokerage \
+losing the trade. Do not fold the unsynced shares into the percentages: those come from \
+positions, and adding them would double-count once the sync arrives.
 - TRADING INTO THE WRONG ACCOUNT IS THE WRONG OUTCOME, and it produces no error — the shares \
 simply land somewhere the user didn't ask for. If they say which account, pass it to \
 preview_trade.
