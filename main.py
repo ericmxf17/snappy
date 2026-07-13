@@ -31,8 +31,21 @@ import transcribe
 import ui
 from assistant import answer
 
-# SF Symbols render as template images: vector, monochrome, and they pick up the
-# menubar's tint automatically — unlike an emoji, which looks pasted on.
+# The Snappy mark: five bars that read as a waveform and as a bar chart at once. All
+# three states are the SAME glyph at different amplitudes — quiet, hot, flat — so the
+# icon never changes identity or width as the state flips. See assets/mark.py.
+#
+# These are TEMPLATE images (black + alpha), so macOS tints them for the light or dark
+# menubar itself. A coloured icon would look pasted on in one of the two.
+ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+MARKS = {
+    "idle": "menubar-idle@2x.png",
+    "listening": "menubar-listening@2x.png",
+    "thinking": "menubar-thinking@2x.png",
+}
+
+# If the assets are ever missing, fall back to Apple's stock symbols rather than
+# showing nothing at all — a menubar app you can't see is a menubar app you can't quit.
 SYMBOLS = {
     "idle": "waveform",
     "listening": "waveform.circle.fill",
@@ -184,6 +197,7 @@ class Snappy(rumps.App):
         self.panel_ready = False
         self.wired = False
         self.icon_state = None
+        self.marks = {}  # status -> NSImage, loaded once
         self.target = None  # strong ref: PyObjC won't retain the click target
 
         self.menu = ["Ask Snappy", "Show panel", None]
@@ -300,17 +314,35 @@ class Snappy(rumps.App):
 
         return {**s, "sub": sub}
 
+    def _mark(self, status):
+        """The Snappy mark for a status, loaded once and kept."""
+        if status in self.marks:
+            return self.marks[status]
+
+        path = os.path.join(ASSETS, MARKS.get(status, MARKS["idle"]))
+        image = AppKit.NSImage.alloc().initWithContentsOfFile_(path)
+        if image is not None:
+            # The file is 36px — the @2x rep. Declaring it 18pt tells macOS this is a
+            # retina image for an 18pt slot, so it uses the full resolution instead of
+            # drawing a 36pt icon that overflows the menubar.
+            image.setSize_(AppKit.NSMakeSize(18, 18))
+        else:
+            image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                SYMBOLS.get(status, SYMBOLS["idle"]), "Snappy"
+            )
+        if image is not None:
+            image.setTemplate_(True)  # let macOS tint it for the light/dark menubar
+
+        self.marks[status] = image
+        return image
+
     def set_icon(self, status):
         if status == self.icon_state:
             return
         self.icon_state = status
-        name = SYMBOLS.get(status, SYMBOLS["idle"])
-        image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
-            name, "Snappy"
-        )
-        if image is None:  # symbol unavailable on this macOS — keep the text title
+        image = self._mark(status)
+        if image is None:  # nothing to draw — keep the text title rather than vanish
             return
-        image.setTemplate_(True)
         button = self._nsapp.nsstatusitem.button()
         button.setImage_(image)
         button.setTitle_("")

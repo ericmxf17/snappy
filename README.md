@@ -1,3 +1,5 @@
+<img src="assets/icon.png" width="120" alt="Snappy">
+
 # Snappy
 
 **Talk to your brokerage accounts.** Hold ⌥, ask a question, let go. The answer is written into
