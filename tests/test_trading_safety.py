@@ -416,3 +416,63 @@ def test_a_new_proposal_replaces_the_old_one(monkeypatch):
 
     trading.confirm()
     assert placed == ["trade-B"]
+
+
+def test_typing_confirm_answers_the_order_instead_of_asking_claude(monkeypatch):
+    """A typed "confirm" must reach the regex gate, not the model.
+
+    It didn't. ask_text() shipped every typed string to Claude — so "confirm" went to
+    a model that has no tool to place an order and is deliberately never told one is
+    pending. It answered "I don't have a pending trade proposal" while the confirm
+    card sat on screen. The voice path and the buttons both routed correctly; only
+    the composer was unwired.
+    """
+    import main
+
+    wire(monkeypatch, [PAPER])
+    trading.propose("BUY", "NVDA", 1)
+
+    app = object.__new__(main.Snappy)   # no rumps.App init — we only want the method
+    app.recording = False
+
+    routed, asked = [], []
+    monkeypatch.setattr(app, "resolve_trade", lambda *a, **k: routed.append(a))
+    monkeypatch.setattr(app, "answer", lambda *a, **k: asked.append(a))
+    monkeypatch.setattr(main.threading, "Thread",
+                        lambda target, args=(), daemon=None: type(
+                            "T", (), {"start": lambda _s: target(*args)})())
+
+    app.ask_text("confirm")
+    assert routed == [(True, "confirm")], "typed confirm must go to the gate"
+    assert asked == [], "and must NOT be sent to the model as a question"
+
+    trading.cancel()
+
+
+def test_typing_a_question_while_an_order_waits_still_reaches_claude(monkeypatch):
+    """Only an unambiguous yes/no is intercepted.
+
+    "What's the risk?" during a confirmation is a real question, and an unclear reply
+    must leave the order STANDING — silence once destroyed a trade the user wanted.
+    """
+    import main
+
+    wire(monkeypatch, [PAPER])
+    trading.propose("BUY", "NVDA", 1)
+
+    app = object.__new__(main.Snappy)
+    app.recording = False
+
+    routed, asked = [], []
+    monkeypatch.setattr(app, "resolve_trade", lambda *a, **k: routed.append(a))
+    monkeypatch.setattr(app, "answer", lambda *a, **k: asked.append(a))
+    monkeypatch.setattr(main.threading, "Thread",
+                        lambda target, args=(), daemon=None: type(
+                            "T", (), {"start": lambda _s: target(*args)})())
+
+    app.ask_text("what's the risk here?")
+    assert routed == [], "a question is not an answer to the order"
+    assert asked == [("what's the risk here?",)]
+    assert trading.pending() is not None, "the order must survive an unrelated question"
+
+    trading.cancel()

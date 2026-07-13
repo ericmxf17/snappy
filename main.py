@@ -366,9 +366,32 @@ class Snappy(rumps.App):
         threading.Thread(target=target, args=(wav,), daemon=True).start()
 
     def ask_text(self, question):
-        """A question typed into the panel — no mic, no Whisper."""
+        """A question typed into the panel — no mic, no Whisper.
+
+        If an order is waiting, a typed "confirm" or "cancel" is an ANSWER to it, not
+        a new question. Sending it to Claude instead was a real bug: the model has no
+        tool that can place or cancel an order and is deliberately never told one is
+        pending, so it replied "I don't have a pending trade proposal" — while the
+        confirm card sat right there on screen. The voice path and the buttons both
+        route through resolve_trade; this door was the one left unwired.
+
+        Only an unambiguous yes/no is intercepted. "What's the risk?" is still a
+        question, and anything unclear leaves the order standing rather than killing
+        a trade the user wanted.
+        """
         if self.recording:
             self.stop()
+
+        if trading.pending():
+            if trading.is_confirmation(question) or trading.is_cancellation(question):
+                state.update(question=question)
+                threading.Thread(
+                    target=self.resolve_trade,
+                    args=(trading.is_confirmation(question), question),
+                    daemon=True,
+                ).start()
+                return
+
         state.start_question(question)
         state.update(status="thinking")
         ui.show()
