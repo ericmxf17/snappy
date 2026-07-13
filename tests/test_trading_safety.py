@@ -406,17 +406,63 @@ def test_a_placed_order_keeps_the_previews_numbers(monkeypatch):
     assert filled["status"] == "PENDING"
 
 
-def test_the_confirmation_mic_stops_on_silence():
-    """The confirmation recording must auto-stop when you stop talking.
+def test_snappy_never_opens_the_microphone_by_itself():
+    """A confirmation card is not a reason to switch on someone's microphone.
 
-    It didn't. Only "click" recordings auto-stopped, so the mic opened to hear
-    "confirm" and then never closed — the order aged out underneath it and the
-    user got a baffling "that order expired".
+    Snappy used to open the mic on its own the moment a trade was proposed. That one
+    behaviour caused nearly every trading bug this app has had: the mic that never
+    closed (so the order aged out underneath it), silence read as a cancellation
+    (killing trades the user wanted), Snappy recording its own read-back and refusing
+    its own trade, and "I didn't catch a yes" firing the instant the button appeared.
+
+    Every recording must be one the USER started. This test replaces one that pinned
+    the old auto-mic — that behaviour is gone on purpose, not by accident.
     """
     import main
-    assert "confirm" in main.AUTOSTOP_TRIGGERS
+    assert not hasattr(main.Snappy, "run_confirm"), "the auto-confirm mic is back"
+    assert "confirm" not in main.AUTOSTOP_TRIGGERS
     assert "click" in main.AUTOSTOP_TRIGGERS
     assert "hold" not in main.AUTOSTOP_TRIGGERS, "a held key sends on release"
+
+
+def test_speaking_confirm_reaches_the_gate_not_the_model(monkeypatch):
+    """The ⌥ path forgot the gate, exactly as the text box had.
+
+    With the auto-mic gone, "confirm" arrives through the ordinary voice path — and
+    that path sent everything straight to Claude, who has no tool to place an order
+    and is deliberately never told one is pending. Both input paths now go through
+    ONE router, so there is only one thing to get right.
+    """
+    import main
+
+    wire(monkeypatch, [PAPER])
+    trading.propose("BUY", "NVDA", 1)
+
+    app = object.__new__(main.Snappy)
+    routed, asked = [], []
+    monkeypatch.setattr(app, "resolve_trade", lambda *a, **k: routed.append(a))
+    monkeypatch.setattr(app, "answer", lambda *a, **k: asked.append(a))
+
+    app.route("confirm")
+    assert routed == [(True, "confirm")]
+    assert asked == [], "a spoken confirm must never be sent to the model"
+
+
+def test_an_unclear_transcript_leaves_the_order_standing(monkeypatch):
+    """Whisper mis-hears. That must not place, and must not destroy."""
+    import main
+
+    wire(monkeypatch, [PAPER])
+    trading.propose("BUY", "NVDA", 1)
+
+    app = object.__new__(main.Snappy)
+    routed, asked = [], []
+    monkeypatch.setattr(app, "resolve_trade", lambda *a, **k: routed.append(a))
+    monkeypatch.setattr(app, "answer", lambda *a, **k: asked.append(a))
+
+    app.route("uh, what's the risk on that")
+    assert routed == [], "an unclear transcript is not an answer to the order"
+    assert trading.pending() is not None, "the order must survive being mis-heard"
 
 
 def test_expired_and_nothing_pending_are_different_messages(monkeypatch):

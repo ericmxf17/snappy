@@ -43,10 +43,26 @@ ACCESSIBILITY_PANE = (
 )
 
 # Recordings that end when you stop talking. A held ⌥ is the exception — that one
-# sends on release. "confirm" MUST be in here: it was left out once, and that mic
-# then never closed at all, so every proposed order aged out under a misleading
-# "that order expired".
-AUTOSTOP_TRIGGERS = ("click", "confirm")
+# sends on release.
+#
+# There used to be a third trigger, "confirm": Snappy opened the mic BY ITSELF when a
+# trade was proposed. Every recording it started was a recording nobody asked for, and
+# it was the source of nearly every trading bug this app has had. It is gone. Snappy
+# only ever listens because the user made it listen.
+AUTOSTOP_TRIGGERS = ("click",)
+
+
+def answers_pending_order(text):
+    """Is this an ANSWER to an order on the table, rather than a new question?
+
+    Only an unambiguous yes or no counts. "What's the risk?" is still a question, and
+    anything unclear — silence, a garbled transcript, a follow-up — leaves the order
+    standing. Treating "unclear" as "cancel" once destroyed a trade the user wanted
+    while they were reaching for the Confirm button.
+    """
+    return bool(trading.pending()) and (
+        trading.is_confirmation(text) or trading.is_cancellation(text)
+    )
 
 
 
@@ -168,7 +184,6 @@ class Snappy(rumps.App):
         self.wired = False
         self.icon_state = None
         self.target = None  # strong ref: PyObjC won't retain the click target
-        self.want_confirm = False  # a worker asks the main thread to reopen the mic
 
         self.menu = ["Ask Snappy", "Show panel", None]
 
@@ -231,12 +246,16 @@ class Snappy(rumps.App):
 
         self.set_icon(state.STATE["status"])
 
-        # A worker proposed a trade and wants the mic reopened to hear a yes. Only
-        # the main thread may do that — starting a recording shows the panel.
+        # Snappy used to OPEN THE MIC here, by itself, the moment a trade was
+        # proposed. That one behaviour caused nearly every trading bug this app has
+        # had: the mic that never closed (so the order aged out underneath it),
+        # silence read as a cancellation (killing trades the user wanted), Snappy
+        # recording its own read-back and refusing its own trade, and "I didn't catch
+        # a yes" firing the instant the button appeared.
         #
-        if self.want_confirm and not self.recording:
-            self.want_confirm = False
-            self.start("confirm")
+        # It is gone. A confirmation card is not a reason to switch on someone's
+        # microphone. There are three ways to say yes — the button, the text box, and
+        # holding ⌥ and saying "confirm" — and all three are things the USER starts.
 
         # Don't touch the dirty flag until the page can actually receive the
         # update — building the snapshot clears it, and a push into a half-loaded
@@ -344,15 +363,15 @@ class Snappy(rumps.App):
             return
         self.recording = True
         self.trigger = trigger
-        # A confirmation isn't a new question — clearing state here would wipe the
-        # order that's being confirmed right off the screen.
-        if trigger != "confirm":
+        # Clearing state would wipe a pending order right off the screen, and the
+        # thing the user is most likely to say into an open mic while a confirmation
+        # card is up is "confirm".
+        if not trading.pending():
             state.start_question()
         state.update(status="listening")
         ui.show()
 
     def stop(self):
-        was = self.trigger
         self.recording = False
         self.trigger = None
         state.update(status="thinking", level=0.0)
@@ -360,16 +379,15 @@ class Snappy(rumps.App):
         heard = audio.heard_speech()
         wav = audio.stop_recording()
         if wav is None or not heard:
-            state.update(status="idle")
-            if was == "confirm":
-                # Silence is not consent. Say nothing, place nothing.
-                self.resolve_trade(confirmed=False, heard="")
-            else:
+            # Silence is neither consent nor cancellation. If an order is on the
+            # table it STAYS on the table — say nothing, place nothing, destroy
+            # nothing.
+            state.update(status="confirming" if trading.pending() else "idle")
+            if not trading.pending():
                 notify("I didn't hear anything.")
             return
 
-        target = self.run_confirm if was == "confirm" else self.run_voice
-        threading.Thread(target=target, args=(wav,), daemon=True).start()
+        threading.Thread(target=self.run_voice, args=(wav,), daemon=True).start()
 
     def ask_text(self, question):
         """A question typed into the panel — no mic, no Whisper.
@@ -388,32 +406,44 @@ class Snappy(rumps.App):
         if self.recording:
             self.stop()
 
-        if trading.pending():
-            if trading.is_confirmation(question) or trading.is_cancellation(question):
-                state.update(question=question)
-                threading.Thread(
-                    target=self.resolve_trade,
-                    args=(trading.is_confirmation(question), question),
-                    daemon=True,
-                ).start()
-                return
+        if answers_pending_order(question):
+            state.update(question=question)   # don't wipe the order off the screen
+        else:
+            state.start_question(question)
+            state.update(status="thinking")
+            ui.show()
 
-        state.start_question(question)
-        state.update(status="thinking")
-        ui.show()
-        threading.Thread(target=self.answer, args=(question,), daemon=True).start()
+        threading.Thread(target=self.route, args=(question,), daemon=True).start()
 
     # --- answering (worker thread — never touches AppKit) -------------------
 
+    def route(self, text):
+        """Is this an ANSWER to the order on the table, or a new question?
+
+        The single fork for everything the user says or types. Spoken and typed input
+        used to take different paths here, and each path had to remember the gate
+        independently — the typed one forgot, and "confirm" went to a model that has
+        no tool to place an order and is deliberately never told one is pending.
+        One fork, so there is only one thing to get right.
+        """
+        if answers_pending_order(text):
+            self.resolve_trade(trading.is_confirmation(text), text)
+            return
+        self.answer(text)
+
     def run_voice(self, wav):
+        # No vocabulary priming while an order is pending. The usual prompt ends
+        # "...or say confirm or cancel", and Whisper parrots its prompt when the audio
+        # is mostly silence — which would forge the one word that moves money.
+        priming = "" if trading.pending() else None
         try:
-            question = transcribe.transcribe(wav)
+            question = transcribe.transcribe(wav, prompt=priming)
         except Exception as e:
             print("ERROR transcribing:", e)
             return
         print(f"heard: {question!r}")
         state.update(question=question)
-        self.answer(question)
+        self.route(question)
 
     def answer(self, question):
         try:
@@ -433,14 +463,12 @@ class Snappy(rumps.App):
         state.update(status="answered")
         self.refresh_portfolio()
 
-        # Claude may have PROPOSED a trade. It cannot place one. If there's an order
-        # waiting, reopen the mic and listen for a yes — but ask the main thread to
-        # do it, because starting a recording touches the panel and AppKit is
-        # main-thread only.
+        # Claude may have PROPOSED a trade. It cannot place one. Show the card and
+        # WAIT — the user decides when to answer, and how. Snappy does not open the
+        # microphone to hurry them along.
         order = trading.pending()
         if order:
             state.update(pending=order, status="confirming")
-            self.want_confirm = True
             return
 
         state.finish_question()
@@ -449,19 +477,6 @@ class Snappy(rumps.App):
     # --- confirming a trade -------------------------------------------------
     # The model is not involved in any of this. It proposed an order; whether that
     # order executes is decided here, by a regex, from what the user actually said.
-
-    def run_confirm(self, wav):
-        try:
-            # NO vocabulary prompt here. The usual one ends "...or say confirm or
-            # cancel", and Whisper parrots its prompt when the audio is mostly
-            # silence — which a confirmation window is. That hallucinated the very
-            # words this step authorises on.
-            said = transcribe.transcribe(wav, prompt="")
-        except Exception as e:
-            print("ERROR transcribing confirmation:", e)
-            said = ""
-        print(f"confirmation heard: {said!r}")
-        self.resolve_trade(trading.is_confirmation(said), said)
 
     def resolve_trade(self, confirmed, heard=""):
         """Place the pending order, or don't. Called from a worker or the bridge.
