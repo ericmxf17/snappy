@@ -98,15 +98,37 @@
     0%   { background: var(--amber); box-shadow: 0 0 0 0 rgba(224,163,64,.55); }
     100% { background: var(--faint); box-shadow: 0 0 0 6px rgba(224,163,64,0); }
   }
-  /* The value itself lifts when it actually changes — the only motion in the panel
-     that means something. */
-  .value.moved { animation: lift .5s ease-out; }
-  @keyframes lift {
-    0%   { color: var(--amber); }
-    100% { color: var(--text); }
+  /* ---- numbers that moved ------------------------------------------------
+     Every figure on screen carries a key and its value. When a refresh brings a
+     different number, that number — and only that number — flashes, in the direction
+     it went. Green up, red down: the one convention in finance you can rely on a
+     stranger already knowing.
+
+     Flashing everything on every render would be noise, and noise is indistinguishable
+     from nothing. The point is to draw the eye to what actually changed. */
+  .up, .down { animation: pulseNum .9s ease-out; border-radius: 3px; }
+  .up   { color: #6FBF8B !important; }
+  .down { color: #E0705F !important; }
+  @keyframes pulseNum {
+    0%   { background: currentColor; filter: brightness(2); }
+    12%  { background: color-mix(in srgb, currentColor 22%, transparent); }
+    100% { background: transparent; }
   }
+
+  /* The headline number is bigger, so it gets a longer, calmer version. */
+  .value.up, .value.down { animation: pulseNum 1.3s ease-out; }
+
+  /* How much it moved, next to the net worth. A direction with no size is a shrug. */
+  .delta { font-size: 11px; margin-left: 8px; font-weight: 600;
+           font-family: ui-monospace, Menlo, monospace;
+           font-variant-numeric: tabular-nums;
+           opacity: 0; transition: opacity .3s ease; }
+  .delta.show { opacity: 1; }
+  .delta.up   { color: #6FBF8B; }
+  .delta.down { color: #E0705F; }
+
   @media (prefers-reduced-motion: reduce) {
-    .fresh.beat i, .value.moved { animation: none; }
+    .fresh.beat i, .up, .down { animation: none; }
   }
   .trig { font-size: 11px; color: var(--faint); margin-top: 5px; }
 
@@ -298,7 +320,10 @@
     <div id="wave"></div>
 
     <div class="hero">
-      <div class="value" id="value">—</div>
+      <div style="display:flex; align-items:baseline">
+        <span class="value" id="value">—</span>
+        <span class="delta" id="delta"></span>
+      </div>
       <div class="sub" id="sub">connecting…</div>
       <div class="fresh" id="fresh"></div>
       <div class="trig"><span class="opt">Hold <kbd>⌥</kbd> to talk</span> · or type below</div>
@@ -487,7 +512,34 @@
   // portfolio; the page counts up from there. So the seconds keep ticking between
   // refreshes instead of the panel sitting frozen and looking broken.
   let lastRead = null;    // epoch seconds of the last real portfolio read
-  let lastValue = null;   // to flash the number only when it actually moves
+
+  // Every number on screen, keyed, as it was on the LAST render. After each render we
+  // walk the new ones and flash only those that actually moved — flashing everything
+  // on every push would be noise, and noise is indistinguishable from nothing.
+  const seen = new Map();
+  let firstPaint = true;
+
+  const markMoves = (root) => {
+    const changed = [];
+    for (const el of root.querySelectorAll('[data-k]')) {
+      const key = el.dataset.k;
+      const now = parseFloat(el.dataset.v);
+      const before = seen.get(key);
+      if (!Number.isNaN(now)) {
+        // Nothing "changed" on the first paint — it all just appeared. Flashing the
+        // whole panel green the moment it opens would be a lie about what just happened.
+        if (!firstPaint && before !== undefined && now !== before) {
+          el.classList.remove('up', 'down');
+          void el.offsetWidth;                        // restart the animation
+          el.classList.add(now > before ? 'up' : 'down');
+          changed.push({ key, from: before, to: now });
+        }
+        seen.set(key, now);
+      }
+    }
+    firstPaint = false;
+    return changed;
+  };
 
   // Which account rows the user has opened. The feed is rebuilt from scratch on EVERY
   // push — including the 30s background refresh — so without this an expanded account
@@ -500,7 +552,8 @@
               aria-expanded="${openAccounts.has(a.account_id)}">
         <span class="caretx">▶</span>
         <span class="nm">${esc(a.label)}</span>
-        <span class="amt">${money(a.total_value)}</span>
+        <span class="amt" data-k="acct:${esc(a.account_id)}" data-v="${a.total_value}"
+          >${money(a.total_value)}</span>
       </button>
       <div class="body">
         ${a.error ? `<div class="empty">Couldn't read this account: ${esc(a.error)}</div>`
@@ -508,7 +561,9 @@
             ? `<table>${a.positions.map(p => `<tr>
                  <td class="sym">${esc(p.symbol)}</td>
                  <td class="num wt">${p.units}</td>
-                 <td class="num">${money((p.units || 0) * (p.price || 0))}</td>
+                 <td class="num" data-k="ap:${esc(a.account_id)}:${esc(p.symbol)}"
+                     data-v="${(p.units || 0) * (p.price || 0)}"
+                   >${money((p.units || 0) * (p.price || 0))}</td>
                </tr>`).join('')}</table>`
             : `<div class="empty">No positions.</div>`}
         ${(a.unsynced_fills || []).length
@@ -540,17 +595,21 @@
       answered: 'Ready', confirming: 'Confirm?', choosing: 'Which account?',
     }[s.status] || 'Ready';
 
-    // Flash ONLY on a real change. Flashing on every push would be theatre — the
-    // panel re-renders constantly, and a light that always blinks tells you nothing.
     const valueEl = document.getElementById('value');
-    const next = money(s.total_value);
-    if (lastValue !== null && next !== lastValue) {
-      valueEl.classList.remove('moved');
-      void valueEl.offsetWidth;            // restart the animation
-      valueEl.classList.add('moved');
+    const before = seen.get('net');
+    valueEl.textContent = money(s.total_value);
+    valueEl.dataset.k = 'net';
+    valueEl.dataset.v = s.total_value ?? '';
+
+    // A direction with no size is a shrug. Say how much it moved.
+    const deltaEl = document.getElementById('delta');
+    if (before !== undefined && s.total_value != null && s.total_value !== before) {
+      const diff = s.total_value - before;
+      const up = diff > 0;
+      deltaEl.className = `delta show ${up ? 'up' : 'down'}`;
+      deltaEl.textContent =
+        `${up ? '▲' : '▼'} ${money(Math.abs(diff))}`;
     }
-    lastValue = next;
-    valueEl.textContent = next;
 
     document.getElementById('sub').textContent = s.sub || '';
 
@@ -583,8 +642,8 @@
           <td class="sym">${esc(p.symbol)}${
             p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}</td>
           <td class="num wt">${p.units}</td>
-          <td class="num">${money(p.market_value)}</td>
-          <td class="num wt">${p.weight_pct}%</td>
+          <td class="num" data-k="mv:${esc(p.symbol)}" data-v="${p.market_value}">${money(p.market_value)}</td>
+          <td class="num wt" data-k="wt:${esc(p.symbol)}" data-v="${p.weight_pct}">${p.weight_pct}%</td>
         </tr>`).join('')}</table>
       </div>`);
     }
@@ -623,6 +682,11 @@
     for (const b of feed.querySelectorAll('[data-account]')) {
       b.onclick = () => send({type: 'account', account_id: b.dataset.account});
     }
+
+    // Now that the DOM exists, compare every number against the last render and flash
+    // the ones that moved. Must run AFTER innerHTML — before it, we'd be diffing the
+    // previous frame against itself.
+    markMoves(document.body);
 
     // Expanding an account is purely local — no round-trip to Python, and nothing to
     // wait for. The Set is what survives the next re-render.
