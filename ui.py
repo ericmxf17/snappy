@@ -54,16 +54,17 @@ class _DragStrip(AppKit.NSView):
     is the exact bug that made the Confirm button dead for hours. So the drag area is
     a transparent strip sitting on top of the header, deliberately stopping short of
     the ✕ so that button still gets its clicks.
+
+    There is deliberately NO hitTest_ override here. NSView's default already returns
+    self only for points inside this view's own frame, which is exactly the behaviour
+    we want. The override I wrote called isMousePoint_inRect_, which does not exist on
+    NSView — so it raised inside an ObjC callback. This strip is the TOPMOST view, so
+    AppKit asked it about every click anywhere in the panel; it threw every time, hit
+    testing collapsed, and NOTHING in the panel was clickable. Don't reintroduce it.
     """
 
     def mouseDownCanMoveWindow(self):
         return True
-
-    def hitTest_(self, point):
-        # Claim header drags, but never swallow a click meant for the page.
-        return self if self.isMousePoint_inRect_(
-            self.convertPoint_fromView_(point, self.superview()), self.bounds()
-        ) else None
 
     def resetCursorRects(self):
         # An open hand over the header — otherwise nobody discovers it's draggable.

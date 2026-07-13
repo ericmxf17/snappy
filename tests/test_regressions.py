@@ -162,3 +162,22 @@ def test_finishing_a_question_files_it_into_history(state_reset):
     assert state.STATE["history"][0]["question"] == "what's my balance?"
     assert state.STATE["history"][0]["answer"] == "A hundred thousand."
     assert state.STATE["question"] == ""          # cleared for the next one
+
+
+def test_the_drag_strip_does_not_override_hit_testing():
+    """The drag strip must not define hitTest_. This killed EVERY click in the panel.
+
+    The strip is the topmost view, so AppKit asks it about every click anywhere in
+    the window. My override called isMousePoint_inRect_ — a method NSView does not
+    have — so it raised inside an ObjC callback on every single hit test. Hit testing
+    collapsed and nothing in the panel was clickable: not Confirm, not Dismiss, not
+    the close box.
+
+    NSView's DEFAULT hitTest_ already claims only points inside the view's own frame,
+    which is exactly what a header drag handle wants. The override was never needed.
+    """
+    import ui
+    assert "hitTest_" not in vars(ui._DragStrip), (
+        "_DragStrip overrides hitTest_ again — that override took out every click "
+        "in the panel the last time it existed"
+    )
