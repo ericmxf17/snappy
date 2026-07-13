@@ -678,10 +678,24 @@ def get_all_holdings():
             worth = (p["units"] or 0) * (p["price"] or 0)
             value += worth
             slot = combined.setdefault(
-                p["symbol"], {"symbol": p["symbol"], "units": 0.0, "market_value": 0.0, "accounts": []}
+                p["symbol"],
+                {
+                    "symbol": p["symbol"], "units": 0.0, "market_value": 0.0,
+                    "cost_basis": 0.0, "priced_basis": True, "accounts": [],
+                },
             )
             slot["units"] += p["units"] or 0
             slot["market_value"] = round(slot["market_value"] + worth, 2)
+
+            # Cost basis, summed the same way as market value, so gain/loss can be shown
+            # for a position SPLIT ACROSS accounts — which is the only place it isn't
+            # already on a brokerage statement.
+            basis = p.get("average_purchase_price")
+            if basis is None:
+                slot["priced_basis"] = False   # can't price the basis; won't guess at it
+            else:
+                slot["cost_basis"] = round(slot["cost_basis"] + basis * (p["units"] or 0), 2)
+
             slot["accounts"].append({"brokerage": account["institution"], "units": p["units"]})
 
         total_holdings += value
@@ -705,6 +719,20 @@ def get_all_holdings():
     for slot in combined.values():
         slot["weight_pct"] = round(100 * slot["market_value"] / net_worth, 2) if net_worth else 0.0
         slot["held_in"] = len(slot["accounts"])
+
+        # Gain/loss. None — not zero — when any leg of the position has no purchase
+        # price, because a missing basis would silently read as "bought at $0", which
+        # renders as an enormous fake profit. An admitted gap beats a confident lie;
+        # the panel draws a dash.
+        basis = slot["cost_basis"]
+        if slot["priced_basis"] and basis > 0:
+            slot["unrealized_pnl"] = round(slot["market_value"] - basis, 2)
+            slot["unrealized_pct"] = round(100 * (slot["market_value"] - basis) / basis, 2)
+        else:
+            slot["cost_basis"] = None
+            slot["unrealized_pnl"] = None
+            slot["unrealized_pct"] = None
+        slot.pop("priced_basis", None)
 
     holdings = sorted(combined.values(), key=lambda h: h["market_value"], reverse=True)
 

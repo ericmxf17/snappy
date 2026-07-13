@@ -328,6 +328,7 @@ class Snappy(rumps.App):
             state.update(
                 total_value=book["net_worth"],
                 cash=book["total_cash"],
+                holdings_value=book["total_holdings_value"],
                 positions=book["combined_holdings"],
                 account_count=book["account_count"],
                 # Per-account contents, for the expandable Accounts card. The combined

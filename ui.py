@@ -140,8 +140,9 @@ class _Bridge(NSObject):
             hide()
 
 
-WIDTH, HEIGHT = 400, 620
+WIDTH, HEIGHT = 440, 700
 MARGIN = 24
+RADIUS = 18.0  # must match --radius in panel.html — see create()
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
 
 
@@ -223,7 +224,7 @@ def create():
     blur.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
     blur.setState_(AppKit.NSVisualEffectStateActive)
     blur.setWantsLayer_(True)
-    blur.layer().setCornerRadius_(18.0)
+    blur.layer().setCornerRadius_(RADIUS)
     blur.layer().setMasksToBounds_(True)
     blur.setAutoresizingMask_(AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable)
 
@@ -240,6 +241,21 @@ def create():
     _webview.setAutoresizingMask_(
         AppKit.NSViewWidthSizable | AppKit.NSViewHeightSizable
     )
+
+    # Round the WEB VIEW too, not just the blur beneath it.
+    #
+    # The blur view is already masked to a rounded rect — but a WKWebView hosts its
+    # content in its own layer tree, and that layer is NOT clipped by a superview's
+    # mask. So the page painted its opaque background straight across the corners: the
+    # frosted slab was round and the thing drawn on top of it was a rectangle. The
+    # corners looked square because they were.
+    #
+    # The page also rounds itself in CSS. Belt and braces: either mechanism alone will
+    # do it, and each covers a case the other can lose.
+    _webview.setWantsLayer_(True)
+    _webview.layer().setCornerRadius_(RADIUS)
+    _webview.layer().setMasksToBounds_(True)
+
     # Let the vibrancy behind show through the page.
     _webview.setValue_forKey_(False, "drawsBackground")
     _delegate = _Nav.alloc().init()

@@ -19,6 +19,7 @@ STATE = {
     "history": [],  # newest first: {question, answer, calls, sources}
     "total_value": None,
     "cash": None,
+    "holdings_value": None,  # the other half of the composition bar
     "positions": [],
     "accounts": [],  # per-account contents, for the expandable Accounts card
     "account_count": 1,  # >1 → the panel stops naming a single brokerage

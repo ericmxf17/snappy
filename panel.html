@@ -8,17 +8,31 @@
      every AI demo, and it also washed the text out. This is one warm accent on a
      near-black scrim — the contrast comes from the scrim, not from shouting. */
   :root {
-    --ink:      rgba(14, 16, 19, .78);   /* scrim over the macOS blur */
+    --ink:      rgba(14, 16, 19, .80);   /* scrim over the macOS blur */
     --text:     #F2EFE9;                 /* warm off-white, not pure #fff */
     --dim:      #9AA0A8;
     --faint:    #6C727A;
     --amber:    #E0A340;
     --line:     rgba(255, 255, 255, .09);
+    --hair:     rgba(255, 255, 255, .055);  /* section rules, quieter than --line */
     --card:     rgba(255, 255, 255, .045);
+    --up:       #6FBF8B;
+    --down:     #E0705F;
+    --track:    rgba(255, 255, 255, .07);   /* the empty part of a bar */
+
+    /* Must match RADIUS in ui.py. The web view is masked there too — see create(). */
+    --radius:   18px;
   }
 
   * { box-sizing: border-box; margin: 0; }
-  html, body { height: 100%; overflow: hidden; }
+
+  /* The blur view beneath is rounded, but a WKWebView paints into its own layer and is
+     not clipped by its superview's mask. Without this, the page's own background is
+     drawn as a rectangle straight across the corners — the frosted slab is round and
+     the thing on top of it is square. ui.py masks the web view's layer as well; either
+     alone works, and each covers a case the other can lose. */
+  html, body { height: 100%; overflow: hidden;
+               border-radius: var(--radius); }
 
   body {
     font: 13px/1.55 "SF Pro Text", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -29,24 +43,27 @@
   }
 
   /* A flat scrim under everything. This is what makes the text readable no matter
-     what's on the desktop behind the glass — the old build relied on the blur
-     alone and the answer sat on whatever wallpaper happened to be there. */
-  #scrim { position: fixed; inset: 0; background: var(--ink); z-index: 0; }
+     what's on the desktop behind the glass — the blur alone left the answer sitting on
+     whatever wallpaper happened to be there.
 
-  /* One slow warm glow, low and desaturated. Presence, not a light show. */
-  #glow { position: fixed; inset: -40%; z-index: 0; filter: blur(70px);
-          opacity: .12; transition: opacity .7s ease; }
-  .orb { position: absolute; width: 55%; height: 55%; border-radius: 50%;
-         background: var(--amber); transition: background 1s ease; }
-  .o1 { top: -8%; left: -6%;  animation: d1 26s ease-in-out infinite; }
-  .o2 { bottom: -14%; right: -8%; background: #5A6270;
-        animation: d2 31s ease-in-out infinite; }
+     One warm wash bleeds from the top-left, and it does not move. The two drifting
+     blurred orbs that used to live here were the house style of every AI demo, and they
+     said nothing about the portfolio. Warmth at the top, dark at the bottom, still. */
+  #scrim {
+    position: fixed; inset: 0; z-index: 0;
+    border-radius: var(--radius);
+    background:
+      radial-gradient(120% 80% at 6% -8%, rgba(224,163,64,.13), transparent 62%),
+      var(--ink);
+  }
 
-  @keyframes d1 { 0%,100%{transform:translate(0,0) scale(1)}    50%{transform:translate(26%,18%) scale(1.15)} }
-  @keyframes d2 { 0%,100%{transform:translate(0,0) scale(1.1)}  50%{transform:translate(-18%,-14%) scale(.9)} }
-
-  body[data-status="listening"] #glow { opacity: .22; }
-  body[data-status="thinking"]  #glow { opacity: .18; }
+  /* Fine grain. It is what stops a flat dark panel reading as a flat dark rectangle —
+     glass has tooth. Inline SVG turbulence: no network, no asset, ~200 bytes. */
+  #grain {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    opacity: .035; border-radius: var(--radius);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
 
   /* ---- layout ---------------------------------------------------------- */
   #shell { position: relative; z-index: 1; height: 100%;
@@ -82,22 +99,43 @@
   .hero { flex: none; }
   /* Mono, tabular. Money in a proportional font is the tell of a toy; the digits
      also stop jittering as the value updates. */
-  .value { font: 500 29px/1.15 ui-monospace, "SF Mono", Menlo, monospace;
-           letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--text); }
-  .sub { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .value { font: 500 34px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
+           letter-spacing: -.028em; font-variant-numeric: tabular-nums; color: var(--text); }
 
-  /* Freshness, shown rather than claimed. A number with no timestamp that never moves
-     looks exactly like a number that is right. The dot pulses on every re-read, so
-     "live" is something you can watch instead of something we assert. */
-  .fresh { font-size: 10px; color: var(--faint); margin-top: 5px;
-           display: flex; align-items: center; gap: 5px; height: 12px; }
-  .fresh i { width: 4px; height: 4px; border-radius: 50%; background: var(--faint);
-             flex: none; }
-  .fresh.beat i { animation: beat 1.1s ease-out; }
+  /* ONE meta line, not three. It used to say where the money is, when it was last read,
+     and how to talk to the app — three stacked rows of small grey text under the one
+     number anybody actually came to see. The trigger hint is in the composer's
+     placeholder and the empty state already; it did not need a third home. */
+  .meta { display: flex; align-items: center; gap: 6px; margin-top: 6px;
+          font-size: 11px; color: var(--dim); height: 14px; }
+  .meta .sep { color: var(--faint); }
+  .meta .ago { color: var(--faint); display: flex; align-items: center; gap: 5px; }
+  .meta .ago i { width: 4px; height: 4px; border-radius: 50%; background: var(--faint);
+                 flex: none; }
+  /* The dot pulses on every re-read, so "live" is something you can watch rather than
+     something we assert. A number with no timestamp that never moves looks exactly
+     like a number that is right. */
+  .meta .ago.beat i { animation: beat 1.1s ease-out; }
   @keyframes beat {
     0%   { background: var(--amber); box-shadow: 0 0 0 0 rgba(224,163,64,.55); }
     100% { background: var(--faint); box-shadow: 0 0 0 6px rgba(224,163,64,0); }
   }
+
+  /* ---- composition ------------------------------------------------------
+     Invested vs cash, in one bar. 78% cash is a fact about a portfolio that a column
+     of numbers makes you compute and a bar makes you see. */
+  .comp { margin-top: 12px; }
+  .comp .bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden;
+               background: var(--track); }
+  .comp .bar i { display: block; height: 100%; transition: width .5s ease; }
+  .comp .inv  { background: var(--amber); }
+  .comp .csh  { background: rgba(255,255,255,.20); }
+  .comp .key  { display: flex; gap: 12px; margin-top: 6px;
+                font-size: 10px; color: var(--faint); }
+  .comp .key b { color: var(--dim); font-weight: 500;
+                 font-variant-numeric: tabular-nums; }
+  .comp .key .sw { display: inline-block; width: 6px; height: 6px; border-radius: 2px;
+                   margin-right: 5px; vertical-align: 0; }
   /* ---- numbers that moved ------------------------------------------------
      Every figure on screen carries a key and its value. When a refresh brings a
      different number, that number — and only that number — flashes, in the direction
@@ -107,8 +145,8 @@
      Flashing everything on every render would be noise, and noise is indistinguishable
      from nothing. The point is to draw the eye to what actually changed. */
   .up, .down { animation: pulseNum .9s ease-out; border-radius: 3px; }
-  .up   { color: #6FBF8B !important; }
-  .down { color: #E0705F !important; }
+  .up   { color: var(--up) !important; }
+  .down { color: var(--down) !important; }
   @keyframes pulseNum {
     0%   { background: currentColor; filter: brightness(2); }
     12%  { background: color-mix(in srgb, currentColor 22%, transparent); }
@@ -124,13 +162,12 @@
            font-variant-numeric: tabular-nums;
            opacity: 0; transition: opacity .3s ease; }
   .delta.show { opacity: 1; }
-  .delta.up   { color: #6FBF8B; }
-  .delta.down { color: #E0705F; }
+  .delta.up   { color: var(--up); }
+  .delta.down { color: var(--down); }
 
   @media (prefers-reduced-motion: reduce) {
     .fresh.beat i, .up, .down { animation: none; }
   }
-  .trig { font-size: 11px; color: var(--faint); margin-top: 5px; }
 
   /* ---- tabs --------------------------------------------------------------
      The conversation and the portfolio are different things and were sharing one
@@ -202,20 +239,56 @@
          font-size: 10px; color: var(--faint); }
   .src span { margin-right: 9px; }
 
-  /* ---- holdings -------------------------------------------------------- */
-  .hd { font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
-        color: var(--faint); margin-bottom: 8px; }
+  /* ---- section labels --------------------------------------------------
+     Portfolio content is RULED, not boxed. The filled, bordered card treatment is now
+     reserved for things you can act on — the trade card, the picker, a notice — so that
+     "boxed" means "this wants a decision from you" instead of meaning nothing. */
+  .sec { margin-bottom: 4px; }
+  .hd { font-size: 9px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
+        color: var(--faint); margin-bottom: 10px;
+        display: flex; align-items: baseline; gap: 8px; }
+  .hd .rule { flex: 1; height: 1px; background: var(--hair); }
+
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   td { padding: 4px 0; }
   .sym { font-weight: 600; }
   .num { text-align: right; font-family: ui-monospace, Menlo, monospace;
          font-variant-numeric: tabular-nums; }
   .wt { color: var(--dim); }
+
+  /* ---- a position ------------------------------------------------------
+     Two lines. Ticker and value on top; a weight bar, the weight, and the gain/loss
+     below. The bar is the whole point: a column of percentages makes you compare
+     numbers, a column of bars makes you see the shape of the book. */
+  .pos { padding: 9px 0; border-top: 1px solid var(--hair); }
+  .pos:first-of-type { border-top: 0; padding-top: 2px; }
+  .pos .l1 { display: flex; align-items: baseline; gap: 7px; }
+  .pos .tk { font: 600 13px "SF Pro Text", sans-serif; letter-spacing: -.01em; }
+  .pos .vl { margin-left: auto; font: 500 13px ui-monospace, "SF Mono", Menlo, monospace;
+             font-variant-numeric: tabular-nums; }
+  .pos .un { font-size: 11px; color: var(--faint);
+             font-family: ui-monospace, Menlo, monospace;
+             font-variant-numeric: tabular-nums; }
+  .pos .l2 { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .pos .track { flex: 1; height: 4px; border-radius: 2px; background: var(--track);
+                overflow: hidden; min-width: 40px; }
+  .pos .fill { display: block; height: 100%; background: var(--amber); opacity: .85;
+               border-radius: 2px; transition: width .5s ease; }
+  .pos .pct { font: 11px ui-monospace, Menlo, monospace; color: var(--dim);
+              font-variant-numeric: tabular-nums; width: 42px; text-align: right; }
+  .pos .pnl { font: 500 11px ui-monospace, Menlo, monospace;
+              font-variant-numeric: tabular-nums; width: 74px; text-align: right; }
+  .pos .pnl.gain { color: var(--up); }
+  .pos .pnl.loss { color: var(--down); }
+  /* No purchase price for some leg of the position, so there is no honest gain to
+     show. A dash, not a zero — zero is a claim. */
+  .pos .pnl.none { color: var(--faint); }
+
   /* A position split across accounts. Amber because it's the finding, not a footnote:
      each brokerage shows you half of it and calls that the whole. */
-  .split { margin-left: 6px; font-size: 9px; font-weight: 600; letter-spacing: .06em;
+  .split { font-size: 9px; font-weight: 600; letter-spacing: .06em;
            color: var(--amber); border: 1px solid rgba(224,163,64,.35);
-           border-radius: 3px; padding: 1px 4px; vertical-align: 1px; }
+           border-radius: 3px; padding: 1px 4px; }
 
   /* ---- accounts, expandable ---------------------------------------------
      "What do I own" is the combined table. This answers "and where is it". */
@@ -336,7 +409,7 @@
 
 <body data-status="idle">
   <div id="scrim"></div>
-  <div id="glow"><div class="orb o1"></div><div class="orb o2"></div></div>
+  <div id="grain"></div>
 
   <div id="shell">
     <header>
@@ -352,9 +425,12 @@
         <span class="value" id="value">—</span>
         <span class="delta" id="delta"></span>
       </div>
-      <div class="sub" id="sub">connecting…</div>
-      <div class="fresh" id="fresh"></div>
-      <div class="trig"><span class="opt">Hold <kbd>⌥</kbd> to talk</span> · or type below</div>
+      <div class="meta">
+        <span id="sub">connecting…</span>
+        <span class="sep" id="metaSep"></span>
+        <span class="ago" id="fresh"></span>
+      </div>
+      <div class="comp" id="comp"></div>
     </div>
 
     <div id="banner">
@@ -587,6 +663,16 @@
           el.classList.remove('up', 'down');
           void el.offsetWidth;                        // restart the animation
           el.classList.add(now > before ? 'up' : 'down');
+
+          // The flash is TRANSIENT. It used to be permanent — the class stayed until
+          // the number moved the other way, so a net worth that ticked up stayed green
+          // indefinitely, and a P&L showing a loss in red would have been recoloured
+          // green by a single upward tick and left that way. The flash says "this just
+          // moved"; the underlying colour says "this is a gain or a loss". Different
+          // claims, and the flash must not be able to overwrite the other one.
+          el.addEventListener('animationend',
+            () => el.classList.remove('up', 'down'), { once: true });
+
           changed.push({ key, from: before, to: now });
         }
         seen.set(key, now);
@@ -632,8 +718,10 @@
 
   const drawFresh = () => {
     const el = document.getElementById('fresh');
+    const sep = document.getElementById('metaSep');
     if (!el) return;
-    if (!lastRead) { el.innerHTML = ''; return; }
+    if (!lastRead) { el.innerHTML = ''; if (sep) sep.textContent = ''; return; }
+    if (sep) sep.textContent = '·';
     const secs = Math.max(0, Math.round(Date.now() / 1000 - lastRead));
     const ago = secs < 5 ? 'just now'
               : secs < 60 ? `${secs}s ago`
@@ -641,6 +729,59 @@
     el.innerHTML = `<i></i>updated ${ago}`;
   };
   setInterval(drawFresh, 1000);
+
+  // Invested vs cash, in one bar. "78% cash" is a fact about a portfolio that a column
+  // of numbers makes you compute and a bar makes you see.
+  const compHTML = (s) => {
+    const total = s.total_value;
+    if (!total) return '';
+    const invested = s.holdings_value ?? 0;
+    const cash = s.cash ?? 0;
+    const iPct = 100 * invested / total;
+    const cPct = 100 * cash / total;
+    return `
+      <div class="bar">
+        <i class="inv" style="width:${iPct.toFixed(2)}%"></i>
+        <i class="csh" style="width:${cPct.toFixed(2)}%"></i>
+      </div>
+      <div class="key">
+        <span><span class="sw" style="background:var(--amber)"></span>Invested
+          <b data-k="ipct" data-v="${iPct.toFixed(2)}">${iPct.toFixed(1)}%</b></span>
+        <span><span class="sw" style="background:rgba(255,255,255,.20)"></span>Cash
+          <b data-k="cpct" data-v="${cPct.toFixed(2)}">${cPct.toFixed(1)}%</b></span>
+      </div>`;
+  };
+
+  // One position. The bar is scaled against the LARGEST holding, not against 100% —
+  // at a 7% weight, a bar in a full-width track is a sliver, and a chart nobody can
+  // read is decoration.
+  const posHTML = (p, biggest) => {
+    const share = biggest > 0 ? Math.max(2, 100 * (p.weight_pct || 0) / biggest) : 0;
+    const pnl = p.unrealized_pnl;
+    const pct = p.unrealized_pct;
+
+    // A dash, not a zero. Zero is a claim, and we don't have the purchase price.
+    const cls = pnl == null ? 'none' : pnl >= 0 ? 'gain' : 'loss';
+    const text = pnl == null ? '—'
+      : `${pnl >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(1)}%`;
+
+    return `<div class="pos">
+      <div class="l1">
+        <span class="tk">${esc(p.symbol)}</span>
+        ${p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}
+        <span class="un">${p.units}</span>
+        <span class="vl" data-k="mv:${esc(p.symbol)}" data-v="${p.market_value}"
+          >${money(p.market_value)}</span>
+      </div>
+      <div class="l2">
+        <span class="track"><i class="fill" style="width:${share.toFixed(1)}%"></i></span>
+        <span class="pct" data-k="wt:${esc(p.symbol)}" data-v="${p.weight_pct}"
+          >${(p.weight_pct ?? 0).toFixed(2)}%</span>
+        <span class="pnl ${cls}" data-k="pnl:${esc(p.symbol)}" data-v="${pnl ?? ''}"
+          >${text}</span>
+      </div>
+    </div>`;
+  };
 
   window.setState = (s) => {
     lastState = s;
@@ -668,6 +809,7 @@
     }
 
     document.getElementById('sub').textContent = s.sub || '';
+    document.getElementById('comp').innerHTML = compHTML(s);
 
     // A re-read landed: pulse the dot, and restart the "ago" counter.
     if (s.updated_at && s.updated_at !== lastRead) {
@@ -720,25 +862,24 @@
       // trade confirmations.
       feed.dataset.empty = 'No holdings yet.';
 
+      // Accounts FIRST, collapsed. They cost two rows and they answer "where is my
+      // money" — which is what the user actually could not see. Put them under seven
+      // holdings and they are below the fold, which is the bug we set out to fix.
       if ((s.accounts || []).length > 1) {
-        parts.push(`<div class="card">
-          <div class="hd">Accounts</div>
+        parts.push(`<div class="sec">
+          <div class="hd">Accounts <span class="rule"></span> ${s.accounts.length}</div>
           ${s.accounts.map(accountRowHTML).join('')}
         </div>`);
       }
 
       if (s.positions.length) {
         // held_in > 1 is the number no single brokerage can show you: the same stock,
-        // split across accounts, looking small twice.
-        parts.push(`<div class="card">
-          <div class="hd">Holdings · all accounts</div>
-          <table>${s.positions.map(p => `<tr>
-            <td class="sym">${esc(p.symbol)}${
-              p.held_in > 1 ? `<span class="split">${p.held_in} accts</span>` : ''}</td>
-            <td class="num wt">${p.units}</td>
-            <td class="num" data-k="mv:${esc(p.symbol)}" data-v="${p.market_value}">${money(p.market_value)}</td>
-            <td class="num wt" data-k="wt:${esc(p.symbol)}" data-v="${p.weight_pct}">${p.weight_pct}%</td>
-          </tr>`).join('')}</table>
+        // split across accounts, looking small twice. Bars are scaled to the largest
+        // holding, so the shape of the book is legible instead of a row of slivers.
+        const biggest = Math.max(...s.positions.map(p => p.weight_pct || 0));
+        parts.push(`<div class="sec">
+          <div class="hd">Holdings <span class="rule"></span> all accounts</div>
+          ${s.positions.map(p => posHTML(p, biggest)).join('')}
         </div>`);
       }
     }
