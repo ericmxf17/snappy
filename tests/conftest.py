@@ -19,6 +19,12 @@ os.environ.setdefault("SNAPTRADE_CLIENT_ID", "PERS-TEST")
 os.environ.setdefault("SNAPTRADE_CONSUMER_KEY", "test-consumer-key")
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
 
+# Pin the auth mode. Otherwise the suite asks the macOS Keychain whether this developer
+# happens to be signed in to SnapTrade OAuth — real, machine-wide, mutable state — and the
+# wrapper would silently swap the SDK for the read-only bearer client halfway through a
+# trading test. Tests must not depend on the machine they run on.
+os.environ["SNAPPY_AUTH_MODE"] = "keys"
+
 import pytest  # noqa: E402
 
 

@@ -9,13 +9,62 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+import auth
 import config
+from snaptrade_bearer import BearerClient, ReadOnly  # noqa: F401  (re-exported)
 from snaptrade_client import SnapTrade
 
-_client = SnapTrade(
-    client_id=config.SNAPTRADE_CLIENT_ID,
-    consumer_key=config.SNAPTRADE_CONSUMER_KEY,
-)
+# Two ways in, and the rest of this file cannot tell them apart.
+#
+#   oauth  BearerClient — the user signed in through the browser. READ ONLY, because
+#          SnapTrade grants Personal OAuth the 'read' scope and refuses the rest.
+#   keys   the official SDK, signing with a clientId/consumerKey pair. Can trade.
+#
+# BearerClient is duck-typed to the SDK (same calls, same `.body`), and _USER is empty in
+# OAuth mode because a bearer token already says who you are. So every function below is
+# written once and works either way.
+_client = None
+_USER = {}
+
+
+def mode():
+    """'oauth' | 'keys' | None — which credentials we actually have."""
+    if config.FORCE_AUTH_MODE:      # tests pin this; the Keychain is machine-wide state
+        return config.FORCE_AUTH_MODE
+    if auth.signed_in():            # OAuth wins: it's the one the user chose in the UI
+        return "oauth"
+    if config.HAS_KEYS:
+        return "keys"
+    return None
+
+
+def can_trade():
+    """Only Personal keys can move money. OAuth is read-only, by SnapTrade's own rule."""
+    return mode() == "keys"
+
+
+def connect(force=None):
+    """(Re)build the client for the current credentials. Call after sign-in or sign-out."""
+    global _client, _USER
+    m = force or mode()
+    if m == "oauth":
+        _client, _USER = BearerClient(), {}
+    elif m == "keys":
+        _client = SnapTrade(
+            client_id=config.SNAPTRADE_CLIENT_ID,
+            consumer_key=config.SNAPTRADE_CONSUMER_KEY,
+        )
+        _USER = {
+            "user_id": config.SNAPTRADE_USER_ID,
+            "user_secret": config.SNAPTRADE_USER_SECRET,
+        }
+    else:
+        _client, _USER = None, {}
+    invalidate()
+    return m
+
+# connect() runs at the BOTTOM of this module, not here — it calls invalidate(), which
+# names cached functions that don't exist yet at this point in the file.
 
 
 def _cached(seconds):
@@ -125,10 +174,8 @@ def prime():
             list(pool.map(pull, [a["account_id"] for a in accounts]))
 
 
-_USER = {
-    "user_id": config.SNAPTRADE_USER_ID,
-    "user_secret": config.SNAPTRADE_USER_SECRET,
-}
+# _USER is set by connect(), above — it's the personal-keys id/secret pair in "keys" mode,
+# and EMPTY in OAuth mode, because a bearer token already identifies the user.
 
 
 def _hours_since(timestamp):
@@ -1213,3 +1260,8 @@ def list_supported_brokerages():
         }
         for b in brokers
     ]
+
+
+# Build the client LAST, once every cached read above exists — connect() calls invalidate(),
+# which names them. Doing this at the top of the file raises NameError at import.
+connect()

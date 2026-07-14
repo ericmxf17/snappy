@@ -1,4 +1,20 @@
-"""Loads credentials from .env. Fails loudly at import if anything is missing."""
+"""Credentials. SnapTrade keys are OPTIONAL — OAuth users will never have any.
+
+There are two ways to reach SnapTrade, and the whole point of the first one is that the
+user never sees a key:
+
+    OAuth (auth.py)   sign in through the browser. Tokens go in the macOS Keychain.
+                      READ ONLY — SnapTrade grants Personal OAuth the 'read' scope and
+                      refuses every other one at registration.
+
+    Personal keys     paste a clientId/consumerKey pair into .env. Can trade.
+
+So this module must NOT die at import when SNAPTRADE_* is absent: that is the normal,
+expected state for someone who installed the .dmg and signed in with OAuth. It used to
+raise a KeyError there, which would have made "one-click install" impossible.
+
+ANTHROPIC_API_KEY is still required, because Snappy is nothing without a model.
+"""
 
 import os
 
@@ -12,14 +28,23 @@ from dotenv import load_dotenv
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_ROOT, ".env"))
 
-SNAPTRADE_CLIENT_ID = os.environ["SNAPTRADE_CLIENT_ID"]
-SNAPTRADE_CONSUMER_KEY = os.environ["SNAPTRADE_CONSUMER_KEY"]
+# Optional: absent means "this user signs in with OAuth", not "this user is broken".
+SNAPTRADE_CLIENT_ID = os.environ.get("SNAPTRADE_CLIENT_ID") or None
+SNAPTRADE_CONSUMER_KEY = os.environ.get("SNAPTRADE_CONSUMER_KEY") or None
+
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 
 # Personal (non-commercial) SnapTrade accounts use these literal placeholders
-# instead of a per-end-user id/secret pair.
+# instead of a per-end-user id/secret pair. Unused in OAuth mode: a bearer token
+# already says who you are.
 SNAPTRADE_USER_ID = "personal"
 SNAPTRADE_USER_SECRET = "personal"
+
+HAS_KEYS = bool(SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY)
+
+# Tests must not depend on whether the developer happens to be signed in to OAuth on this
+# Mac — the Keychain is real, shared, machine-wide state. conftest pins this to "keys".
+FORCE_AUTH_MODE = os.environ.get("SNAPPY_AUTH_MODE") or None
 
 # Sonnet over Opus deliberately: on the SpaceX research question Sonnet answered in
 # 11s against Opus's 38s, and got it MORE right (it caught the June 2026 IPO and used

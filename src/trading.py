@@ -142,6 +142,19 @@ def check_account(hint=None):
     Returns the account dict. Raises TradeRefused, or AmbiguousAccount if the hint
     matched more than one account — we ask rather than guess where to put the money.
     """
+    # An OAuth session physically cannot trade: SnapTrade grants Personal OAuth the
+    # 'read' scope and rejects every other one at registration (scope=trade -> HTTP 400,
+    # "scope must be 'read'."). Refuse HERE, at the top of the guard chain, so the user
+    # gets a sentence that explains itself — rather than a 403 thrown from inside the
+    # HTTP layer after they've already said "confirm" to a trade card.
+    if not st.can_trade():
+        raise TradeRefused(
+            "You're signed in with SnapTrade OAuth, which is read-only — SnapTrade only "
+            "grants the 'read' scope to Personal OAuth apps today, so no app can place an "
+            "order with it. I can still see everything across your accounts. To trade, add "
+            "SnapTrade Personal API keys."
+        )
+
     account = st.resolve_account(hint)   # AmbiguousAccount propagates on purpose
 
     connection = next(
@@ -300,6 +313,18 @@ def propose(action, symbol, units, account=None):
     rather than picking — see that class.
     """
     global _pending, _choice
+
+    # Refuse a read-only session BEFORE anything else. check_account() catches this too,
+    # but it runs AFTER the account picker — so without this an OAuth user would be asked
+    # which account to buy in, choose one, and only then be told that trading is impossible.
+    # Ask nobody for a decision you already know you will refuse to act on.
+    if not st.can_trade():
+        raise TradeRefused(
+            "You're signed in with SnapTrade OAuth, which is read-only — SnapTrade only "
+            "grants the 'read' scope to Personal OAuth apps today, so no app can place an "
+            "order with it. I can still see everything across your accounts. To trade, add "
+            "SnapTrade Personal API keys."
+        )
 
     action = action.upper()
     if action not in ("BUY", "SELL"):
