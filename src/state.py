@@ -26,6 +26,8 @@ STATE = {
     "updated_at": None,  # when the portfolio was last actually re-read
     "unsynced": [],  # filled at the brokerage, not yet in SnapTrade's positions
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
+    "auth_mode": None,  # None | "oauth" | "keys" — see snaptrade_client_wrapper.mode()
+    "signing_in": False,  # True while a browser sign-in is in flight
     "pending": None,  # a proposed trade awaiting your yes — see trading.py
     "choose": None,  # a trade waiting on WHICH account — the panel offers the list
     "notice": "",  # a short status line: "cancelled", "I didn't hear anything"

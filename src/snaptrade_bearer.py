@@ -74,7 +74,9 @@ class _AccountInformation:
         return _get(f"/accounts/{account_id}/balances")
 
     def get_all_account_positions(self, account_id, **_):
-        return _get(f"/accounts/{account_id}/positions")
+        # The legacy /positions endpoint now returns 410 for newer users. This is
+        # SnapTrade's unified replacement (equities, options, crypto, futures).
+        return _get(f"/accounts/{account_id}/positions/all")
 
     def get_user_account_orders(self, account_id, **kw):
         params = {}
@@ -100,6 +102,11 @@ class _ReferenceData:
 
     def list_all_brokerages(self, **_):
         return _get("/brokerages")
+
+
+class _Connections:
+    def list_brokerage_authorizations(self, **_):
+        return _get("/authorizations")
 
 
 class _Trading:
@@ -136,5 +143,6 @@ class BearerClient:
 
     def __init__(self):
         self.account_information = _AccountInformation()
+        self.connections = _Connections()
         self.reference_data = _ReferenceData()
         self.trading = _Trading()

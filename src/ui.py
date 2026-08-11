@@ -28,6 +28,7 @@ _on_ask = None
 _on_confirm = None
 _on_cancel = None
 _on_account = None
+_on_signin = None
 
 # Where the user dragged the panel to. Once they've moved it, that's where it
 # belongs — show() must stop hauling it back to the corner.
@@ -137,6 +138,9 @@ class _Bridge(NSObject):
             account_id = (body.get("account_id") or "").strip()
             if account_id and _on_account:
                 _on_account(account_id)
+        elif kind == "signin":  # "Sign in with SnapTrade" button
+            if _on_signin:
+                _on_signin()
         elif kind == "close":  # the ✕, or Escape
             hide()
 
@@ -171,6 +175,12 @@ def set_on_account(callback):
     """callback(account_id) — fired when the user picks which account to trade in."""
     global _on_account
     _on_account = callback
+
+
+def set_on_signin(callback):
+    """callback() — fired when the "Sign in with SnapTrade" button is clicked."""
+    global _on_signin
+    _on_signin = callback
 
 
 def _corner():

@@ -327,6 +327,17 @@
   body[data-hotkey="off"] #banner { display: block; }
   body[data-hotkey="off"] .opt { opacity: .38; text-decoration: line-through; }
 
+  /* ---- connect ----------------------------------------------------------
+     The very first thing a one-click install shows: no key to paste, one
+     button, a browser tab. */
+  .connect .title { font-weight: 600; font-size: 12px; }
+  .connect .sub   { color: var(--dim); font-size: 11px; line-height: 1.55;
+                     margin: 4px 0 10px; }
+  .connect button { width: 100%; border: 0; border-radius: 8px; padding: 9px;
+                     cursor: pointer; font: 600 12px "SF Pro Text", sans-serif;
+                     background: var(--amber); color: #14110B; transition: opacity .12s; }
+  .connect button:disabled { opacity: .55; cursor: default; }
+
   /* ---- notice ---------------------------------------------------------- */
   /* Snappy has no voice, so anything it would have said lands here. */
   .notice { font-size: 12px; color: var(--text); background: rgba(255,255,255,.06);
@@ -562,6 +573,19 @@
         <button class="no" id="btnNo">Dismiss</button>
       </div>
       <div class="say">press ⌥ and say “confirm”, or type it</div>
+    </div>`;
+
+  // The first thing a one-click install shows. No key is ever typed here — the
+  // button opens dashboard.snaptrade.com in the real browser, and Python catches
+  // the redirect on a loopback port. See auth.py.
+  const connectHTML = (signingIn) => `
+    <div class="card connect">
+      <div class="title">Connect your brokerage</div>
+      <div class="sub">Sign in once at SnapTrade to see every account you've linked here —
+        nothing is typed, and no key ever touches this app.</div>
+      <button id="btnSignIn" ${signingIn ? 'disabled' : ''}>
+        ${signingIn ? 'Opening your browser…' : 'Sign in with SnapTrade'}
+      </button>
     </div>`;
 
   // Which account this lands in. Shown on every confirmation card: with more than one
@@ -825,9 +849,17 @@
     // must never be hidden behind a tab you aren't looking at.
     const pinned = [];
     if (s.notice) pinned.push(`<div class="notice">${esc(s.notice)}</div>`);
+    // Not signed in and no keys configured — nothing else on screen is useful
+    // until this is resolved, so it goes first, above even a notice.
+    if (s.auth_mode == null) pinned.unshift(connectHTML(s.signing_in));
     if (s.choose) pinned.push(chooseHTML(s.choose));
     if (s.pending) pinned.push(tradeHTML(s.pending, s.total_value));
     document.getElementById('pinned').innerHTML = pinned.join('');
+
+    // Rebuilt from scratch on every push, so re-bind it every time — same reason
+    // the trade card's buttons are re-bound below.
+    const signIn = document.getElementById('btnSignIn');
+    if (signIn) signIn.onclick = () => send({type: 'signin'});
 
     // A new question pulls you back to Ask — you asked it, you want to see it. But
     // only on a NEW one: yanking the tab out from under someone browsing their

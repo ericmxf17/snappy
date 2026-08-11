@@ -27,6 +27,10 @@ _client = None
 _USER = {}
 
 
+class NoAccountsError(RuntimeError):
+    """The user is authenticated but has no brokerage accounts linked."""
+
+
 def mode():
     """'oauth' | 'keys' | None — which credentials we actually have."""
     if config.FORCE_AUTH_MODE:      # tests pin this; the Keychain is machine-wide state
@@ -236,7 +240,7 @@ def list_accounts():
 def _default_account_id():
     accounts = list_accounts()
     if not accounts:
-        raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+        raise NoAccountsError("No brokerage accounts are connected to SnapTrade.")
     return accounts[0]["account_id"]
 
 
@@ -273,7 +277,7 @@ def resolve_account(hint=None):
     """
     accounts = list_accounts()
     if not accounts:
-        raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+        raise NoAccountsError("No brokerage accounts are connected to SnapTrade.")
 
     if hint is None or not str(hint).strip():
         return accounts[0]
@@ -855,7 +859,7 @@ def get_all_holdings():
     """
     accounts = list_accounts()
     if not accounts:
-        raise RuntimeError("No brokerage accounts are connected to SnapTrade.")
+        raise NoAccountsError("No brokerage accounts are connected to SnapTrade.")
 
     # Fetch every account CONCURRENTLY, then let the loop below read from the cache.
     #
