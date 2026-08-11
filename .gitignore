@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 assets/Snappy.iconset/
 assets/candidates/
+build/
+dist/
+*.dmg

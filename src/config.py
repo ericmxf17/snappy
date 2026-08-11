@@ -17,6 +17,7 @@ ANTHROPIC_API_KEY is still required, because Snappy is nothing without a model.
 """
 
 import os
+import sys
 
 from dotenv import load_dotenv
 
@@ -25,8 +26,21 @@ from dotenv import load_dotenv
 # next to .env, but now that the code lives in src/ it would silently find nothing if
 # you launched from anywhere else, and the app would die on a missing key instead of a
 # missing file. .env stays at the root; it is gitignored and never travels.
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#
+# A packaged .app (see setup.py) has no repo root to look next to, and OAuth users are
+# never meant to have a .env at all — but ANTHROPIC_API_KEY isn't part of that flow, and
+# still needs somewhere to live. ~/Library/Application Support is the standard per-user
+# home for exactly this, so it's checked too, and wins if both exist: it's the one the
+# packaged app's user actually edited.
+if getattr(sys, "frozen", False):
+    _ROOT = os.environ.get("RESOURCEPATH", "")
+else:
+    _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+_SUPPORT_ENV = os.path.expanduser("~/Library/Application Support/Snappy/.env")
+
 load_dotenv(os.path.join(_ROOT, ".env"))
+load_dotenv(_SUPPORT_ENV, override=True)
 
 # Optional: absent means "this user signs in with OAuth", not "this user is broken".
 SNAPTRADE_CLIENT_ID = os.environ.get("SNAPTRADE_CLIENT_ID") or None

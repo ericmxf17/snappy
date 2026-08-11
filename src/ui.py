@@ -11,6 +11,7 @@ pauses auto-hide), and Escape.
 
 import json
 import os
+import sys
 
 import AppKit
 import WebKit
@@ -143,7 +144,15 @@ class _Bridge(NSObject):
 WIDTH, HEIGHT = 440, 700
 MARGIN = 24
 RADIUS = 18.0  # must match --radius in panel.html — see create()
-PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
+
+# Running from source, panel.html sits next to this file. Packaged by py2app
+# (see setup.py), this file is zipped into the app and py2app copies loose
+# resources into Contents/Resources instead — which is what RESOURCEPATH points
+# at. Checking sys.frozen keeps one code path working in both.
+if getattr(sys, "frozen", False):
+    PAGE = os.path.join(os.environ.get("RESOURCEPATH", ""), "panel.html")
+else:
+    PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
 
 
 def set_on_ask(callback):

@@ -13,6 +13,7 @@ Run with:  ./venv/bin/python main.py
 
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -37,8 +38,14 @@ from assistant import answer
 #
 # These are TEMPLATE images (black + alpha), so macOS tints them for the light or dark
 # menubar itself. A coloured icon would look pasted on in one of the two.
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
-ASSETS = os.path.join(ROOT, "assets")
+if getattr(sys, "frozen", False):
+    # Packaged by py2app (see setup.py): assets are loose files under Contents/Resources,
+    # not next to this script, which py2app has zipped up into the app instead.
+    ROOT = os.environ.get("RESOURCEPATH", "")
+    ASSETS = os.path.join(ROOT, "assets")
+else:
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
+    ASSETS = os.path.join(ROOT, "assets")
 MARKS = {
     "idle": "menubar-idle@2x.png",
     "listening": "menubar-listening@2x.png",
@@ -717,7 +724,7 @@ def _build():
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, cwd=ROOT,
         ).stdout.strip()
-        return f"{sha}{'+dirty' if dirty else ''}"
+        return f"{sha}{'+dirty' if dirty else ''}" if sha else "packaged"
     except Exception:
         return "unknown"
 
