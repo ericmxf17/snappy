@@ -11,6 +11,7 @@ pauses auto-hide), and Escape.
 
 import json
 import os
+import sys
 
 import AppKit
 import WebKit
@@ -27,6 +28,7 @@ _on_ask = None
 _on_confirm = None
 _on_cancel = None
 _on_account = None
+_on_signin = None
 
 # Where the user dragged the panel to. Once they've moved it, that's where it
 # belongs — show() must stop hauling it back to the corner.
@@ -136,6 +138,9 @@ class _Bridge(NSObject):
             account_id = (body.get("account_id") or "").strip()
             if account_id and _on_account:
                 _on_account(account_id)
+        elif kind == "signin":  # "Sign in with SnapTrade" button
+            if _on_signin:
+                _on_signin()
         elif kind == "close":  # the ✕, or Escape
             hide()
 
@@ -143,7 +148,15 @@ class _Bridge(NSObject):
 WIDTH, HEIGHT = 440, 700
 MARGIN = 24
 RADIUS = 18.0  # must match --radius in panel.html — see create()
-PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
+
+# Running from source, panel.html sits next to this file. Packaged by py2app
+# (see setup.py), this file is zipped into the app and py2app copies loose
+# resources into Contents/Resources instead — which is what RESOURCEPATH points
+# at. Checking sys.frozen keeps one code path working in both.
+if getattr(sys, "frozen", False):
+    PAGE = os.path.join(os.environ.get("RESOURCEPATH", ""), "panel.html")
+else:
+    PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.html")
 
 
 def set_on_ask(callback):
@@ -162,6 +175,12 @@ def set_on_account(callback):
     """callback(account_id) — fired when the user picks which account to trade in."""
     global _on_account
     _on_account = callback
+
+
+def set_on_signin(callback):
+    """callback() — fired when the "Sign in with SnapTrade" button is clicked."""
+    global _on_signin
+    _on_signin = callback
 
 
 def _corner():

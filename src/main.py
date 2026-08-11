@@ -13,6 +13,7 @@ Run with:  ./venv/bin/python main.py
 
 import os
 import subprocess
+import sys
 import threading
 import time
 
@@ -22,6 +23,7 @@ import rumps
 from Foundation import NSObject
 
 import audio
+import auth
 import config
 import hotkey
 import snaptrade_client_wrapper as st
@@ -37,8 +39,14 @@ from assistant import answer
 #
 # These are TEMPLATE images (black + alpha), so macOS tints them for the light or dark
 # menubar itself. A coloured icon would look pasted on in one of the two.
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
-ASSETS = os.path.join(ROOT, "assets")
+if getattr(sys, "frozen", False):
+    # Packaged by py2app (see setup.py): assets are loose files under Contents/Resources,
+    # not next to this script, which py2app has zipped up into the app instead.
+    ROOT = os.environ.get("RESOURCEPATH", "")
+    ASSETS = os.path.join(ROOT, "assets")
+else:
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
+    ASSETS = os.path.join(ROOT, "assets")
 MARKS = {
     "idle": "menubar-idle@2x.png",
     "listening": "menubar-listening@2x.png",
@@ -201,7 +209,8 @@ class Snappy(rumps.App):
         self.marks = {}  # status -> NSImage, loaded once
         self.target = None  # strong ref: PyObjC won't retain the click target
 
-        self.menu = ["Ask Snappy", "Show panel", None]
+        self.menu = ["Ask Snappy", "Show panel", None, "Sign in with SnapTrade", None]
+        state.update(auth_mode=st.mode())
 
         # The panel can't be built here: rumps hasn't created NSApplication yet,
         # and a window made before AppKit is ready never gets displayed. Build it
@@ -221,6 +230,7 @@ class Snappy(rumps.App):
         ui.set_on_ask(self.ask_text)
         ui.set_on_trade(self.confirm_from_panel, self.cancel_from_panel)
         ui.set_on_account(self.account_from_panel)
+        ui.set_on_signin(self.start_oauth_signin)
 
         item = self._nsapp.nsstatusitem
         self.menu_ref = item.menu()  # keep it; we re-attach it for right-clicks
@@ -263,6 +273,15 @@ class Snappy(rumps.App):
             self.wired = True
 
         self.set_icon(state.STATE["status"])
+
+        # The menu item name follows whether we're actually signed in — same item,
+        # same callback, just a different label. See MenuItem's docstring: the title
+        # can change at runtime and the lookup key stays whatever it was at creation.
+        item = self.menu.get("Sign in with SnapTrade")
+        if item is not None:
+            label = "Sign out of SnapTrade" if st.mode() == "oauth" else "Sign in with SnapTrade"
+            if item.title != label:
+                item.title = label
 
         # Snappy used to OPEN THE MIC here, by itself, the moment a trade was
         # proposed. That one behaviour caused nearly every trading bug this app has
@@ -356,6 +375,8 @@ class Snappy(rumps.App):
         $150,000 across two brokerages — a multi-brokerage app displaying a single
         brokerage, which is the exact failure the whole project claims to fix.
         """
+        if st.mode() is None:
+            return
         try:
             book = st.get_all_holdings()
             state.update(
@@ -393,6 +414,8 @@ class Snappy(rumps.App):
             # from context, so knowing you own NVDA is the difference between hearing
             # "Nvidia" and hearing "and video".
             transcribe.set_hints([p["symbol"] for p in book["combined_holdings"]])
+        except st.NoAccountsError:
+            return
         except Exception as e:
             print("portfolio refresh failed:", e)
 
@@ -460,6 +483,54 @@ class Snappy(rumps.App):
     @rumps.clicked("Show panel")
     def show_panel(self, _):
         ui.show()
+
+    @rumps.clicked("Sign in with SnapTrade")
+    def toggle_snaptrade_auth(self, _):
+        if st.mode() == "oauth":
+            self.do_signout()
+        else:
+            self.start_oauth_signin()
+
+    # --- SnapTrade sign-in ---------------------------------------------------
+    # One click, in the panel or the menu, either drives the same flow: open the
+    # browser, wait for consent, come back signed in. No key is ever typed here.
+
+    def start_oauth_signin(self):
+        if state.STATE.get("signing_in"):
+            return
+        state.update(signing_in=True, notice="Opening your browser to sign in with SnapTrade…")
+        ui.show()
+        threading.Thread(target=self._do_signin, daemon=True).start()
+
+    def _do_signin(self):
+        try:
+            auth.sign_in()
+        except auth.AuthError as e:
+            state.update(signing_in=False)
+            notify(f"Sign-in failed: {e}")
+            return
+        except Exception as e:
+            print("ERROR signing in:", e)
+            state.update(signing_in=False)
+            notify("Sign-in failed — see the terminal for details.")
+            return
+
+        # Rebuild the SnapTrade client now that a token exists — mode() will pick
+        # OAuth up because auth.signed_in() is now true.
+        st.connect()
+        state.update(signing_in=False, auth_mode=st.mode())
+        notify("Connected to SnapTrade.")
+        self.refresh_portfolio()
+
+    def do_signout(self):
+        auth.sign_out()
+        st.connect()
+        state.update(
+            auth_mode=st.mode(),
+            total_value=None, cash=None, holdings_value=None,
+            positions=[], accounts=[], account_count=1,
+        )
+        notify("Signed out of SnapTrade.")
 
     # --- recording ---------------------------------------------------------
 
@@ -717,7 +788,7 @@ def _build():
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, cwd=ROOT,
         ).stdout.strip()
-        return f"{sha}{'+dirty' if dirty else ''}"
+        return f"{sha}{'+dirty' if dirty else ''}" if sha else "packaged"
     except Exception:
         return "unknown"
 

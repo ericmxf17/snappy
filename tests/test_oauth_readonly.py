@@ -12,6 +12,7 @@ that it says something a person can act on.
 
 import pytest
 
+import snaptrade_bearer as bearer
 import snaptrade_client_wrapper as st
 import trading
 
@@ -83,6 +84,33 @@ def test_bearer_client_cannot_trade_at_the_transport_layer():
     ):
         with pytest.raises(ReadOnly):
             call()
+
+
+def test_bearer_client_uses_unified_positions_endpoint(monkeypatch):
+    """OAuth must not call the legacy endpoint, which returns 410 for newer users."""
+    paths = []
+    monkeypatch.setattr(
+        bearer, "_get",
+        lambda path, params=None: paths.append(path) or bearer._Response({"results": []}),
+    )
+
+    bearer.BearerClient().account_information.get_all_account_positions("account-id")
+
+    assert paths == ["/accounts/account-id/positions/all"]
+
+
+def test_bearer_client_lists_connections(monkeypatch):
+    """Connection-health tools need the same client surface in OAuth and keys mode."""
+    paths = []
+    monkeypatch.setattr(
+        bearer, "_get",
+        lambda path, params=None: paths.append(path) or bearer._Response([]),
+    )
+
+    response = bearer.BearerClient().connections.list_brokerage_authorizations()
+
+    assert paths == ["/authorizations"]
+    assert response.body == []
 
 
 def test_keys_mode_can_still_trade(monkeypatch):
