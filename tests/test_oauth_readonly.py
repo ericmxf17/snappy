@@ -10,9 +10,14 @@ before or after the user says "confirm". These tests pin down that it notices fi
 that it says something a person can act on.
 """
 
+import socket
+import threading
+import time
+
 import pytest
 
 import snaptrade_bearer as bearer
+import auth
 import snaptrade_client_wrapper as st
 import trading
 
@@ -125,3 +130,39 @@ def test_keys_mode_can_still_trade(monkeypatch):
         trading.propose("BUY", "NVDA", 1)
 
     assert "read-only" not in str(e.value).lower()
+
+
+def test_oauth_callback_shutdown_does_not_wait_for_browser_connection(monkeypatch):
+    """Safari may keep the success-page request alive after rendering it."""
+    # This is an HTTP-server lifecycle test, not a registered-redirect test. An
+    # ephemeral port prevents collisions with Snappy, another test process, or a
+    # managed environment that reserves the production callback ports.
+    monkeypatch.setattr(auth, "PORTS", (0,))
+    release = threading.Event()
+    original = auth._Catcher.do_GET
+
+    def held_open(handler):
+        original(handler)
+        release.wait(2)
+
+    monkeypatch.setattr(auth._Catcher, "do_GET", held_open)
+    server, port = auth._listen()
+    auth._Catcher.query = None
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    client = socket.create_connection(("127.0.0.1", port), timeout=2)
+    client.sendall(b"GET /callback?code=ok&state=ok HTTP/1.1\r\nHost: localhost\r\n\r\n")
+
+    deadline = time.time() + 1
+    while auth._Catcher.query is None and time.time() < deadline:
+        time.sleep(0.01)
+    assert auth._Catcher.query == {"code": "ok", "state": "ok"}
+
+    started = time.monotonic()
+    server.shutdown()
+    elapsed = time.monotonic() - started
+    release.set()
+    client.close()
+    server.server_close()
+
+    assert elapsed < 1, "callback cleanup blocked token exchange"

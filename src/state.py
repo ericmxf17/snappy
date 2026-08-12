@@ -22,12 +22,17 @@ STATE = {
     "holdings_value": None,  # the other half of the composition bar
     "positions": [],
     "accounts": [],  # per-account contents, for the expandable Accounts card
+    "connections": [],  # brokerage permission state: read or trade
+    "connection_health": [],  # normalized passive health status for each brokerage
     "account_count": 1,  # >1 → the panel stops naming a single brokerage
     "updated_at": None,  # when the portfolio was last actually re-read
     "unsynced": [],  # filled at the brokerage, not yet in SnapTrade's positions
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
     "auth_mode": None,  # None | "oauth" | "keys" — see snaptrade_client_wrapper.mode()
+    "oauth_available": False,  # an OAuth session remains saved while keys mode is active
     "signing_in": False,  # True while a browser sign-in is in flight
+    "permission_changing": None,  # connection id in the reauthorization portal
+    "key_setup_connection": None,  # dashboard opened; next click continues this connection
     "pending": None,  # a proposed trade awaiting your yes — see trading.py
     "choose": None,  # a trade waiting on WHICH account — the panel offers the list
     "notice": "",  # a short status line: "cancelled", "I didn't hear anything"
@@ -107,6 +112,7 @@ def snapshot():
             "calls": list(STATE["calls"]),
             "sources": list(STATE["sources"]),
             "positions": list(STATE["positions"]),
+            "connection_health": list(STATE["connection_health"]),
             "history": list(STATE["history"]),
         }
 

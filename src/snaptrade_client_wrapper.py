@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import auth
+import access
 import config
 from snaptrade_bearer import BearerClient, ReadOnly  # noqa: F401  (re-exported)
 from snaptrade_client import SnapTrade
@@ -35,9 +36,14 @@ def mode():
     """'oauth' | 'keys' | None — which credentials we actually have."""
     if config.FORCE_AUTH_MODE:      # tests pin this; the Keychain is machine-wide state
         return config.FORCE_AUTH_MODE
-    if auth.signed_in():            # OAuth wins: it's the one the user chose in the UI
+    preferred = access.preferred_mode()
+    if preferred == "keys" and access.personal_keys():
+        return "keys"
+    if preferred == "oauth" and auth.signed_in():
         return "oauth"
-    if config.HAS_KEYS:
+    if auth.signed_in():
+        return "oauth"
+    if access.personal_keys():
         return "keys"
     return None
 
@@ -54,10 +60,17 @@ def connect(force=None):
     if m == "oauth":
         _client, _USER = BearerClient(), {}
     elif m == "keys":
+        client_id, consumer_key = access.personal_keys() or (None, None)
+        if not client_id or not consumer_key:
+            raise RuntimeError("SnapTrade Personal keys are not configured.")
         _client = SnapTrade(
-            client_id=config.SNAPTRADE_CLIENT_ID,
-            consumer_key=config.SNAPTRADE_CONSUMER_KEY,
+            client_id=client_id,
+            consumer_key=consumer_key,
         )
+        # The API authenticates a Personal-key owner directly, but the generated Python
+        # SDK version used by Snappy still marks these query fields as required. SnapTrade's
+        # documented Personal placeholders satisfy that client-side schema; the key remains
+        # the identity. Live integration tests must cover this because mocks do not.
         _USER = {
             "user_id": config.SNAPTRADE_USER_ID,
             "user_secret": config.SNAPTRADE_USER_SECRET,
@@ -178,8 +191,8 @@ def prime():
             list(pool.map(pull, [a["account_id"] for a in accounts]))
 
 
-# _USER is set by connect(), above — it's the personal-keys id/secret pair in "keys" mode,
-# and EMPTY in OAuth mode, because a bearer token already identifies the user.
+# OAuth leaves _USER empty. The generated SDK currently requires Personal placeholder
+# values in keys mode even though the API authenticates the Personal-key owner directly.
 
 
 def _hours_since(timestamp):
@@ -1103,38 +1116,45 @@ def search_symbols(query, account_id=None):
     return sorted(found, key=rank)[:8]
 
 
+def _connection_health(c):
+    """Normalize SnapTrade authorization metadata for the UI and tools."""
+    updated = c.get("updated_date")
+    stale_hours = None
+    if updated:
+        try:
+            then = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+            stale_hours = round(
+                (datetime.now(timezone.utc) - then).total_seconds() / 3600, 1
+            )
+        except (TypeError, ValueError):
+            pass
+
+    disabled = bool(c.get("disabled"))
+    stale = stale_hours is not None and stale_hours > 24
+    aging = stale_hours is None or stale_hours > 6
+    status = "disabled" if disabled else "stale" if stale else "aging" if aging else "healthy"
+    return {
+        "connection_id": c.get("id"),
+        "brokerage": (c.get("brokerage") or {}).get("name"),
+        "disabled": disabled,
+        "disabled_since": c.get("disabled_date"),
+        # "read" means the connection cannot place orders, only view data.
+        "type": (c.get("type") or "read").lower(),
+        "last_synced": updated,
+        "hours_since_sync": stale_hours,
+        "stale": stale,
+        "status": status,
+    }
+
+
 def get_connection_health():
     """Are the brokerage links healthy, and how stale is the data?
 
     Brokerage connections break and data goes stale — SnapTrade's real, unglamorous
     pain point, and the reason a unification layer needs to be watched, not trusted.
     """
-    out = []
-    for conn in _client.connections.list_brokerage_authorizations(**_USER).body:
-        conn = dict(conn)
-        updated = conn.get("updated_date")
-        stale_hours = None
-        if updated:
-            try:
-                then = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
-                stale_hours = round(
-                    (datetime.now(timezone.utc) - then).total_seconds() / 3600, 1
-                )
-            except ValueError:
-                pass
-        out.append(
-            {
-                "connection_id": conn.get("id"),
-                "brokerage": (conn.get("brokerage") or {}).get("name"),
-                "disabled": conn.get("disabled"),
-                "disabled_since": conn.get("disabled_date"),
-                "type": conn.get("type"),
-                "last_synced": updated,
-                "hours_since_sync": stale_hours,
-                "stale": bool(stale_hours and stale_hours > 24),
-            }
-        )
-    return out
+    return [_connection_health(dict(conn)) for conn in
+            _client.connections.list_brokerage_authorizations(**_USER).body]
 
 
 def refresh_connection(connection_id):
@@ -1236,17 +1256,28 @@ def get_balance_history(account_id=None):
 def list_connections():
     """The user's brokerage connections and their health."""
     conns = _client.connections.list_brokerage_authorizations(**_USER).body
-    return [
-        {
-            "connection_id": c.get("id"),
-            "brokerage": (c.get("brokerage") or {}).get("name"),
-            "disabled": c.get("disabled"),
-            # "read" means the connection can't place trades, only view data.
-            "type": c.get("type"),
-            "created": c.get("created_date"),
-        }
-        for c in conns
-    ]
+    return [{**_connection_health(c), "created": c.get("created_date")} for c in conns]
+
+
+def connection_permission_url(connection_id, permission):
+    """Reauthorize one existing connection as read-only or trade-enabled."""
+    if mode() != "keys":
+        raise RuntimeError("Full permission requires SnapTrade Personal keys.")
+    if permission not in ("read", "trade"):
+        raise ValueError("permission must be read or trade")
+    if not any(c["connection_id"] == connection_id for c in list_connections()):
+        raise ValueError("That brokerage connection is no longer available.")
+
+    login = _client.authentication.login_snap_trade_user(
+        **_USER,
+        reconnect=connection_id,
+        connection_type=permission,
+        immediate_redirect=True,
+    ).body
+    url = dict(login).get("redirectURI")
+    if not url:
+        raise RuntimeError("SnapTrade did not return a reauthorization URL.")
+    return url
 
 
 def list_supported_brokerages():

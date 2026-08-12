@@ -29,6 +29,7 @@ _on_confirm = None
 _on_cancel = None
 _on_account = None
 _on_signin = None
+_on_access = None
 
 # Where the user dragged the panel to. Once they've moved it, that's where it
 # belongs — show() must stop hauling it back to the corner.
@@ -68,6 +69,18 @@ class _DragStrip(AppKit.NSView):
 
     def mouseDownCanMoveWindow(self):
         return True
+
+    def acceptsFirstMouse_(self, event):
+        # NSPanel is intentionally non-activating. Without this, AppKit consumes the
+        # first click and the drag never starts when another application has focus.
+        return True
+
+    def mouseDown_(self, event):
+        # Explicit window dragging is more reliable than background-drag heuristics
+        # for a transparent child view layered over WKWebView.
+        window = self.window()
+        if window is not None:
+            window.performWindowDragWithEvent_(event)
 
     def resetCursorRects(self):
         # An open hand over the header — otherwise nobody discovers it's draggable.
@@ -141,6 +154,11 @@ class _Bridge(NSObject):
         elif kind == "signin":  # "Sign in with SnapTrade" button
             if _on_signin:
                 _on_signin()
+        elif kind == "access":
+            target = body.get("target")
+            connection_id = (body.get("connection_id") or "").strip()
+            if target in ("read", "trade") and connection_id and _on_access:
+                _on_access(target, connection_id)
         elif kind == "close":  # the ✕, or Escape
             hide()
 
@@ -181,6 +199,12 @@ def set_on_signin(callback):
     """callback() — fired when the "Sign in with SnapTrade" button is clicked."""
     global _on_signin
     _on_signin = callback
+
+
+def set_on_access(callback):
+    """callback(target, connection_id) — reauthorize one brokerage connection."""
+    global _on_access
+    _on_access = callback
 
 
 def _corner():

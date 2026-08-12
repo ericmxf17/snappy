@@ -1,6 +1,6 @@
 # Handoff — Snappy (SnapTrade voice assistant)
 
-Written 2026-08-11 for whoever picks this up next (Codex or otherwise). `README.md` is the
+Updated 2026-08-12 for whoever picks this up next (Codex or otherwise). `README.md` is the
 user-facing doc and it is accurate — read it first. This file covers what the README doesn't:
 the current state of the working tree, the decisions that already have reasons behind them, and
 the traps that cost real hours.
@@ -10,8 +10,8 @@ the traps that cost real hours.
 ## What this is, in one paragraph
 
 A macOS menubar app. Hold Right ⌥, ask a question out loud, let go → local Whisper transcribes →
-Claude answers using SnapTrade tools plus server-side web search → the answer is spoken and drawn
-into a floating frosted-glass panel showing the math, the API trace, and sources. It can also
+Claude answers using SnapTrade tools plus server-side web search → the answer is drawn into a
+floating frosted-glass panel showing the math, the API trace, and sources. It can also
 place trades, paper-only, behind a confirmation the model cannot forge. Built by Eric against his
 own Alpaca Paper account (`ALPACA-PAPER`) as a demo for SnapTrade's CTO.
 
@@ -31,7 +31,7 @@ cp .env.example .env                                          # fill in keys
 ./venv/bin/python src/main.py
 ```
 
-Tests: `./venv/bin/python -m pytest -q` → **128 passed** as of this handoff. They run fully
+Tests: `./venv/bin/python -m pytest -q` → **158 passed** as of this handoff. They run fully
 offline with no credentials; nothing in the suite reaches the network.
 
 **Run from Terminal.app, not VS Code.** VS Code is app-translocated here (macOS runs it from a
@@ -40,12 +40,9 @@ hotkey silently does nothing. This is the single most expensive gotcha in the pr
 
 ---
 
-## State of the working tree — READ THIS BEFORE EDITING
+## Current delivery state
 
-`main` is clean and coherent through `1432991`. On top of it there is **uncommitted work in two
-interleaved threads**, both functional but neither committed:
-
-**1. Packaging as a real `.app`** (new, untracked: `setup.py`, `scripts/build_dmg.sh`)
+**1. Packaging as a real `.app`**
 
 - `./venv/bin/python setup.py py2app` → `dist/Snappy.app`; `./scripts/build_dmg.sh` wraps it in a
   drag-to-Applications `.dmg`. Unsigned — no Apple Developer ID — so first launch needs
@@ -56,7 +53,7 @@ interleaved threads**, both functional but neither committed:
   `Contents/Resources`. Both paths must keep working — don't "simplify" one away.
 - Packaged builds also read `~/Library/Application Support/Snappy/.env`, which **overrides** the
   repo `.env`. That's deliberate: the packaged user has no repo root, but still needs somewhere to
-  put `ANTHROPIC_API_KEY`.
+  configure a local Anthropic key or hosted-service URL.
 - `setup.py` carries two non-obvious workarounds, both explained in comments at the top and in
   `OPTIONS["packages"]`: a fake `zlib.__file__` shim (uv's python-build-standalone links zlib
   statically; py2app assumes it's a loadable `.so`), and explicitly-listed packages that py2app's
@@ -65,22 +62,27 @@ interleaved threads**, both functional but neither committed:
 - A real `.app` bundle isn't only cosmetic — it's the fix for the translocation problem above, and
   it's what would unlock Apple's `SFSpeechRecognizer` (TCC-gated, unusable from a plain script).
 
-**2. Wiring OAuth sign-in into the UI** (modifies `main.py`, `panel.html`, `state.py`, `ui.py`)
+**2. SnapTrade Personal OAuth**
 
-- `src/auth.py` (already committed) does SnapTrade Personal OAuth: authorization-code + PKCE,
+- `src/auth.py` does SnapTrade Personal OAuth: authorization-code + PKCE,
   public native client, loopback redirect on a fixed port from `PORTS = (8765, 8919, 9137)`,
   tokens stored in the **macOS Keychain** via the `security` CLI — never `.env`, never on disk.
-- The uncommitted diff adds the surface: a "Sign in with SnapTrade" menu item whose label flips to
-  "Sign out" based on `st.mode()`, a connect card in the panel that pins above everything when
-  `auth_mode == null`, `signing_in` state, and the `signin` bridge message.
+- The app exposes a one-click sign-in from both the menu and panel. Tokens live in Keychain and
+  the bearer client reads accounts the user already connected at dashboard.snaptrade.com.
 - **OAuth is read-only, by SnapTrade's server-side rule** — `POST /oauth/register/` rejects any
   scope but `read`, and the discovery doc agrees (`"scopes_supported": ["read"]`). So trading
   still requires Personal API keys. `can_trade()` returns true only in `keys` mode. The moment
   SnapTrade ships a write scope, that fallback can delete itself.
 
-Nothing here is half-finished in a broken way — it's untested-in-anger rather than incomplete.
-The obvious next steps are: build the `.dmg` and run the OAuth flow end-to-end from inside the
-bundle (fresh Keychain, no `.env`), then commit the two threads **separately**.
+**3. Hosted agent**
+
+- The backend code, authenticated WebSocket client, one-time invites, rate limits, and execution
+  tool exclusion are implemented and covered offline. The service is not deployed yet.
+- Until it is deployed, a tester needs a local `ANTHROPIC_API_KEY`; this is independent of
+  SnapTrade authentication and read-only OAuth users need no SnapTrade API keys.
+
+The remaining release check is to rebuild the unsigned DMG and run Personal OAuth end-to-end from
+inside the installed bundle on a fresh Keychain. First launch requires right-click → Open.
 
 ---
 
