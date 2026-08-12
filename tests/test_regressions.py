@@ -5,6 +5,8 @@ logged, the app just did the wrong thing convincingly.
 """
 
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -184,3 +186,63 @@ def test_the_drag_strip_does_not_override_hit_testing():
         "_DragStrip overrides hitTest_ again — that override took out every click "
         "in the panel the last time it existed"
     )
+
+
+def test_right_click_uses_a_context_menu_that_stays_open(monkeypatch):
+    import main
+
+    shown = []
+    button = object()
+    app = type("App", (), {
+        "_nsapp": type("NSApp", (), {
+            "nsstatusitem": type("Item", (), {"button": lambda self: button})()
+        })(),
+        "menu_ref": "menu",
+    })()
+    monkeypatch.setattr(main, "_current_event", lambda: "event")
+    monkeypatch.setattr(main, "_show_context_menu", lambda *args: shown.append(args))
+
+    main.Snappy.popup_menu(app)
+
+    assert shown == [("menu", "event", button)]
+
+
+def test_ctrl_c_quits_the_application(monkeypatch):
+    import main
+
+    installed = {}
+    quit_calls = []
+    monkeypatch.setattr(main.signal, "signal", lambda sig, fn: installed.update(sig=sig, fn=fn))
+    monkeypatch.setattr(main.rumps, "quit_application", lambda: quit_calls.append(True))
+
+    main.Snappy.enable_terminal_quit(object())
+    installed["fn"](installed["sig"], None)
+
+    assert installed["sig"] == main.signal.SIGINT
+    assert quit_calls == [True]
+
+
+def test_second_snappy_process_cannot_take_instance_lock(tmp_path):
+    lock = tmp_path / "instance.lock"
+    root = __import__("pathlib").Path(__file__).parents[1]
+    script = (
+        "import sys,time; sys.path.insert(0,'src'); import main; "
+        f"assert main.acquire_instance_lock({str(lock)!r}); print('locked', flush=True); "
+        "time.sleep(10)"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", script], cwd=str(root),
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "locked"
+        import main
+        previous = main._instance_lock
+        main._instance_lock = None
+        try:
+            assert main.acquire_instance_lock(str(lock)) is False
+        finally:
+            main._instance_lock = previous
+    finally:
+        child.terminate()
+        child.wait(timeout=5)

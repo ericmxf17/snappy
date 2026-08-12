@@ -112,6 +112,16 @@
   .meta .ago { color: var(--faint); display: flex; align-items: center; gap: 5px; }
   .meta .ago i { width: 4px; height: 4px; border-radius: 50%; background: var(--faint);
                  flex: none; }
+  .access {
+    border: 1px solid var(--line); border-radius: 5px; background: rgba(255,255,255,.04);
+    color: var(--dim); cursor: pointer; padding: 2px 6px;
+    font: 600 9px/1.2 "SF Pro Text", sans-serif; letter-spacing: .05em;
+    text-transform: uppercase; white-space: nowrap;
+  }
+  .access:hover { color: var(--text); border-color: rgba(224,163,64,.45); }
+  .access.full { color: var(--up); }
+  .access:disabled { cursor: wait; opacity: .55; }
+  .access[hidden] { display: none; }
   /* The dot pulses on every re-read, so "live" is something you can watch rather than
      something we assert. A number with no timestamp that never moves looks exactly
      like a number that is right. */
@@ -204,6 +214,23 @@
 
   .card { background: var(--card); border: 1px solid var(--line);
           border-radius: 11px; padding: 11px 12px; }
+
+  .health { padding: 10px 12px; }
+  .health .title { display: flex; align-items: center; gap: 7px; font-size: 11px;
+                   font-weight: 600; color: var(--dim); }
+  .health .summary { margin-left: auto; font-size: 10px; font-weight: 500; }
+  .health .summary.healthy, .health .dot.healthy { color: var(--up); }
+  .health .summary.aging, .health .dot.aging { color: var(--amber); }
+  .health .summary.stale, .health .dot.stale { color: var(--down); }
+  .health .summary.disabled, .health .dot.disabled { color: var(--faint); }
+  .health .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+                 flex: none; }
+  .health .line { display: flex; align-items: baseline; gap: 7px; padding-top: 8px;
+                  margin-top: 8px; border-top: 1px solid var(--hair); }
+  .health .broker { font-weight: 600; }
+  .health .detail { margin-left: auto; color: var(--faint); font-size: 10px;
+                    text-align: right; }
+  .health .why { display: block; color: var(--dim); font-size: 10px; margin-top: 2px; }
 
   .q { font-weight: 500; color: var(--text); font-size: 12px; }
   .q::before { content: "“"; } .q::after { content: "”"; }
@@ -315,6 +342,9 @@
   .acct .body .cashrow span:last-child { margin-left: auto;
                                          font-family: ui-monospace, Menlo, monospace; }
   .acct .empty { font-size: 11px; color: var(--faint); padding: 3px 0; }
+  .acct .permission { display: flex; align-items: center; justify-content: space-between;
+                      border-top: 1px solid var(--line); margin-top: 4px; padding-top: 7px;
+                      color: var(--faint); font-size: 10px; }
 
   .hint { color: var(--dim); font-size: 12px; line-height: 1.9; text-align: center; }
   kbd { background: rgba(255,255,255,.10); border: 1px solid var(--line); border-radius: 4px;
@@ -438,6 +468,7 @@
       </div>
       <div class="meta">
         <span id="sub">connecting…</span>
+        <button class="access" id="accessMode" hidden></button>
         <span class="sep" id="metaSep"></span>
         <span class="ago" id="fresh"></span>
       </div>
@@ -515,6 +546,42 @@
     : '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
   const esc = (s) => (s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+  const syncAge = (h) => {
+    if (h.hours_since_sync == null) return 'sync time unavailable';
+    const hours = Math.max(0, h.hours_since_sync);
+    if (hours < 1) return 'synced less than 1h ago';
+    if (hours < 24) return `synced ${Math.round(hours)}h ago`;
+    const days = hours / 24;
+    return `synced ${days < 2 ? '1 day' : `${Math.round(days)} days`} ago`;
+  };
+
+  const healthHTML = (health) => {
+    if (!health.length) return '';
+    const counts = health.reduce((out, h) => {
+      out[h.status] = (out[h.status] || 0) + 1;
+      return out;
+    }, {});
+    const overall = counts.disabled ? 'disabled' : counts.stale ? 'stale'
+      : counts.aging ? 'aging' : 'healthy';
+    const needs = health.filter(h => h.status !== 'healthy').length;
+    const summary = overall === 'healthy' ? 'All healthy' : `${needs} needs attention`;
+    return `<div class="card health">
+      <div class="title"><span class="dot ${overall}"></span>Connections
+        <span class="summary ${overall}">${summary}</span></div>
+      ${health.map(h => {
+        const name = h.brokerage || 'Brokerage connection';
+        const why = h.status === 'disabled' ? 'Reconnect this brokerage in SnapTrade.'
+          : h.status === 'stale' ? 'SnapTrade has not synced this connection recently.'
+          : h.status === 'aging' && h.hours_since_sync == null
+            ? 'SnapTrade did not provide a sync time.' : '';
+        return `<div class="line">
+          <span class="dot ${h.status}"></span><span class="broker">${esc(name)}</span>
+          <span class="detail">${syncAge(h)}${why ? `<span class="why">${why}</span>` : ''}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  };
 
   // Just enough markdown for what Claude actually emits: **bold** and "- " bullets.
   const fmt = (s) => esc(s)
@@ -711,7 +778,10 @@
   // would snap shut under the user's cursor a few seconds after they opened it.
   const openAccounts = new Set();
 
-  const accountRowHTML = (a) => `
+  const hasFullAccess = (s, connection) =>
+    s.auth_mode === 'keys' && (connection?.type || connection?.connection_type) === 'trade';
+
+  const accountRowHTML = (a, s) => `
     <div class="acct ${openAccounts.has(a.account_id) ? 'open' : ''}">
       <button class="hdr" data-acct="${esc(a.account_id)}"
               aria-expanded="${openAccounts.has(a.account_id)}">
@@ -737,6 +807,18 @@
                filled, not yet synced by SnapTrade
              </div>` : ''}
         <div class="cashrow"><span>Cash</span><span>${money(a.cash)}</span></div>
+        <div class="permission">
+          <span>Snappy access</span>
+          <button class="access ${hasFullAccess(s, a) ? 'full' : ''}"
+                  data-access="${hasFullAccess(s, a) ? 'read' : 'trade'}"
+                  data-connection="${esc(a.connection_id)}"
+                  ${s.permission_changing === a.connection_id ? 'disabled' : ''}>
+            ${s.permission_changing === a.connection_id ? 'Changing…'
+              : hasFullAccess(s, a) ? 'Full permission'
+              : s.key_setup_connection === a.connection_id ? 'Continue setup'
+              : s.auth_mode === 'oauth' ? 'OAuth read-only' : 'Read only'}
+          </button>
+        </div>
       </div>
     </div>`;
 
@@ -835,6 +917,26 @@
     document.getElementById('sub').textContent = s.sub || '';
     document.getElementById('comp').innerHTML = compHTML(s);
 
+    // A single connection gets a compact top-level control. With several connections,
+    // each account exposes its own control in the Portfolio tab so Snappy never changes
+    // the wrong brokerage by guessing.
+    const connections = s.connections || [];
+    const unique = [...new Map(connections.map(c => [c.connection_id, c])).values()];
+    const accessMode = document.getElementById('accessMode');
+    accessMode.hidden = unique.length !== 1;
+    if (unique.length === 1) {
+      const connection = unique[0];
+      const full = hasFullAccess(s, connection);
+      const busy = s.permission_changing === connection.connection_id;
+      accessMode.classList.toggle('full', full);
+      accessMode.disabled = busy;
+      accessMode.textContent = busy ? 'Changing…' : full ? 'Full permission'
+        : s.key_setup_connection === connection.connection_id ? 'Continue setup'
+        : s.auth_mode === 'oauth' ? 'OAuth read-only' : 'Read only';
+      accessMode.dataset.access = full ? 'read' : 'trade';
+      accessMode.dataset.connection = connection.connection_id;
+    }
+
     // A re-read landed: pulse the dot, and restart the "ago" counter.
     if (s.updated_at && s.updated_at !== lastRead) {
       lastRead = s.updated_at;
@@ -900,8 +1002,12 @@
       if ((s.accounts || []).length > 1) {
         parts.push(`<div class="sec">
           <div class="hd">Accounts <span class="rule"></span> ${s.accounts.length}</div>
-          ${s.accounts.map(accountRowHTML).join('')}
+          ${s.accounts.map(a => accountRowHTML(a, s)).join('')}
         </div>`);
+      }
+
+      if ((s.connection_health || []).length) {
+        parts.push(healthHTML(s.connection_health));
       }
 
       if (s.positions.length) {
@@ -936,6 +1042,11 @@
     // "which container is it in today" is not something a click handler should depend on.
     for (const b of document.querySelectorAll('[data-account]')) {
       b.onclick = () => send({type: 'account', account_id: b.dataset.account});
+    }
+    for (const b of document.querySelectorAll('[data-access]')) {
+      b.onclick = () => send({
+        type: 'access', target: b.dataset.access, connection_id: b.dataset.connection,
+      });
     }
 
     // Now that the DOM exists, compare every number against the last render and flash

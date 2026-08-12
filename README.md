@@ -8,9 +8,13 @@ Your brokerage can only ever show you its own slice. Snappy can see all of them 
 is the point: *"NVDA is split across two accounts — 49 shares, $9,983, 6.7% of your net worth."*
 No single broker will ever tell you that.
 
-It can also place trades. Only paper accounts, only after you confirm, and the model that reads
-the web is **structurally incapable of executing anything**. More on that below, because it's the
-part worth reading.
+With a trade-enabled Personal connection, it can also place trades. Live trading is disabled by
+default; paper trades require an explicit confirmation, and the model that reads the web is
+**structurally incapable of executing anything**. SnapTrade Personal OAuth is currently read-only.
+
+> **Current status:** the packaged DMG, SnapTrade Personal OAuth flow, and hosted-agent code
+> are implemented. The hosted service is not deployed yet, so the current build still needs either
+> a local Anthropic key or a configured backend URL.
 
 ---
 
@@ -83,7 +87,7 @@ Python   ──executes──▶  place_order(trade_id)
 
 | Guard | Rule |
 |---|---|
-| Paper accounts only | Uses SnapTrade's own `is_paper` flag on the account being traded — not a substring match on a brokerage name. |
+| Live trading off by default | Unless `SNAPPY_ALLOW_LIVE_TRADING=true` is deliberately set, the selected account must carry SnapTrade's own `is_paper` flag. |
 | The **right** account must be paper | The guard interrogates the account the shares would land in, not "does a paper account exist somewhere". With one paper and one real account connected, the weaker check passes while the order goes into the real one. |
 | Connection must permit trading | Must be healthy and `type=trade`. |
 | Order cap | `$10,000` by default. "Fifty" and "fifteen" sound alike, and the input is your voice. |
@@ -120,7 +124,54 @@ enough to read in one sitting.
 
 ---
 
-## Install
+## Install the macOS app
+
+Build the current DMG from source:
+
+```sh
+brew install ffmpeg portaudio
+git clone https://github.com/ericmxf17/snappy.git
+cd snappy
+uv venv --python 3.12 venv
+VIRTUAL_ENV="$PWD/venv" uv pip install -r requirements.txt
+./scripts/build_dmg.sh
+open dist/Snappy.dmg
+```
+
+Drag Snappy into Applications and launch it. From the menubar:
+
+1. Choose **Sign in with SnapTrade**. Your browser opens the Personal OAuth consent flow.
+2. Grant access to the accounts you already connected at `dashboard.snaptrade.com`.
+3. Choose **Connect Snappy service** and enter a one-time invite if this build points at a hosted
+   backend.
+
+The permission badge beside the account summary shows **Read only** or **Full permission**. The
+first click opens the SnapTrade Dashboard so the user can create or view a Personal API key. After
+they return, **Continue setup** securely collects the Client ID and Consumer Key, stores both in
+Keychain, and opens SnapTrade's hosted portal to reauthorize that exact connection. Clicking
+**Full permission** switches it back to read-only through the same reauthorization flow. OAuth
+itself remains read-only; it is never silently elevated.
+
+Choosing **Quit** keeps SnapTrade and hosted-service sessions in the macOS Keychain, so the next
+launch stays signed in. To disconnect SnapTrade explicitly, choose **Sign in with SnapTrade** from
+the menubar while connected; choose **Connect Snappy service** to disconnect the hosted service.
+
+SnapTrade access and hosted-service sessions are stored in the macOS Keychain. Brokerage
+credentials are entered only on SnapTrade's site and never pass through Snappy.
+
+Until the hosted service is deployed, put a local Anthropic key in:
+
+```text
+~/Library/Application Support/Snappy/.env
+```
+
+```dotenv
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Then relaunch Snappy. OAuth users need no SnapTrade client ID or consumer key.
+
+### Run from source
 
 **1. System dependencies** (Homebrew):
 
@@ -137,27 +188,31 @@ uv venv --python 3.12 venv
 VIRTUAL_ENV="$PWD/venv" uv pip install -r requirements.txt
 ```
 
-**3. Credentials** — copy `.env.example` to `.env` and fill in:
+**3. Model configuration** — copy `.env.example` to `.env` and choose one:
 
 | Key | Where from |
 |---|---|
-| `SNAPTRADE_CLIENT_ID`, `SNAPTRADE_CONSUMER_KEY` | The SnapTrade dashboard — the Personal account `PERS-...` pair. |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
+| `ANTHROPIC_API_KEY` | Local development through [console.anthropic.com](https://console.anthropic.com). |
+| `SNAPPY_BACKEND_URL` | Hosted mode; the backend owns the Anthropic key. |
 
-`.env` is gitignored. Nothing else stores credentials.
+`.env` is gitignored. Do not configure both unless you intentionally want hosted mode to win.
 
-**4. Connect a brokerage — with trading enabled:**
+Launch Snappy and choose **Sign in with SnapTrade** for read-only OAuth access. No SnapTrade API
+keys are required.
+
+**4. Optional: enable paper trading for development.** OAuth currently grants only `read`, so
+trading requires a Personal client ID/consumer key in `.env` and a trade-enabled connection:
 
 ```sh
-./venv/bin/python connect.py ALPACA-PAPER    # opens the SnapTrade portal in your browser
-./venv/bin/python connect.py                 # list what you have
+./venv/bin/python src/connect.py ALPACA-PAPER    # opens the SnapTrade portal in your browser
+./venv/bin/python src/connect.py                 # list what you have
 ```
 
 > **Do not use `snaptrade connect` from the CLI for this.** It cannot create a trade-enabled
 > connection — `connection_type` is a parameter on `login_snap_trade_user` that the CLI never
 > passes, so you silently get a **read-only** link. Everything looks fine until you try to trade,
 > and then orders are refused with a message that doesn't mention the connection at all.
-> `connect.py` passes `connection_type="trade"`.
+> `src/connect.py` passes `connection_type="trade"`.
 
 You enter your brokerage credentials **in the browser**. They never touch this process or this
 repo.
@@ -165,13 +220,45 @@ repo.
 [Alpaca](https://alpaca.markets/) paper accounts are free and take a minute. You can open up to
 three, which is enough to see the cross-account features work.
 
-**5. Run it — from Terminal.app:**
+**5. Run it:**
 
 ```sh
 ./venv/bin/python src/main.py
 ```
 
 A waveform icon appears in the menubar. **Hold ⌥, speak, let go.**
+
+---
+
+## Hosted agent
+
+The hosted service holds the Anthropic key and runs Claude plus web search. SnapTrade OAuth
+tokens and brokerage API calls remain on the Mac. Claude necessarily receives the brokerage data
+returned by the tools it requests so it can answer, but it never receives the OAuth token itself.
+Previews, confirmations, and execution also remain local. The server can request only the 17
+allowlisted read/preview tools; unknown tools are rejected, and no execution endpoint exists.
+
+```sh
+# Server
+VIRTUAL_ENV="$PWD/venv" uv pip install -r backend/requirements.txt
+export ANTHROPIC_API_KEY=...
+export SNAPPY_SESSION_SECRET="$(openssl rand -hex 32)"
+export SNAPPY_INVITE_DB="$PWD/snappy-invites.db"
+./venv/bin/python -m backend.invites       # prints a one-time code
+./venv/bin/uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000
+
+# Mac client (.env during local development)
+SNAPPY_BACKEND_URL=http://127.0.0.1:8000
+```
+
+This service is implemented but not currently deployed. Production must terminate TLS so the
+client uses `wss://`. The included
+[`backend/Dockerfile`](backend/Dockerfile) runs the same service with a persistent invite database.
+Set `ANTHROPIC_API_KEY` and a 32+ character `SNAPPY_SESSION_SECRET`, mount `/data`, and keep one
+replica until rate limits and sessions are moved to a shared store.
+
+Protocol tests cover one-time invites, signed sessions, rate/concurrency limits, rejection of
+execution tools, and the complete server-request → local-tool-result → streamed-answer cycle.
 
 ---
 
@@ -214,16 +301,20 @@ The panel can be **dragged by its header**, and it stays where you put it.
 
 ## How it works
 
-```
-hold ⌥  →  mic  →  Whisper (local)  →  Claude ─┬─→ SnapTrade   (your real accounts)
-                                               └─→ web search  (prices, news, valuations)
-                                                        ↓
-        panel  ←──  headline, then the analysis, the sources, the API trace
+```text
+hold ⌥ → mic → Whisper (local) → hosted Claude → web search
+                                      │
+                                      │ requests an allowlisted tool
+                                      ▼
+panel ← streamed answer ← Mac app → SnapTrade
+                              │
+                              └─ preview → local confirmation → optional execution
 ```
 
-Speech-to-text runs **locally** — no audio leaves the machine. Claude picks which SnapTrade
-endpoint answers the question, searches the web when the answer isn't in your account, and writes
-an answer whose **first paragraph is the headline**, with the detail below.
+Speech-to-text runs **locally** — no audio leaves the machine. Claude requests the local tool that
+can answer the question, searches the web when needed, and writes an answer whose **first paragraph
+is the headline**, with the detail below. SnapTrade credentials and OAuth tokens never go to the
+hosted service.
 
 The transcriber is primed with the tickers you actually hold, which is why it hears *NVDA* rather
 than *and video*, and *buy five shares* rather than *by five shares*.
@@ -258,7 +349,7 @@ its own trade.
 ## Tests
 
 ```sh
-./venv/bin/python -m pytest tests/ -q     # 123 tests, ~4s
+./venv/bin/python -m pytest tests/ -q     # 147 tests, ~2s
 ```
 
 No network, no microphone, no API keys — they run on a fresh clone with no `.env`. The suite
@@ -272,6 +363,8 @@ targets the places where a bug would be **silent** rather than loud.
 | `test_regressions.py` | Bugs that actually shipped: Whisper parroting its own prompt, a tool error killing the answer, a drag handle that swallowed every click in the window. |
 | `test_hotkey_and_threading.py` | Tap-vs-hold on ⌥, and the workers-mutate/timer-reads contract that every threading bug came from breaking. |
 | `test_assistant.py` | The headline/detail split that keeps an answer readable at a glance. |
+| `test_backend_security.py` | Invite replay, signed sessions, limits, execution-tool rejection, and a full WebSocket tool round-trip. |
+| `test_backend_client.py` | The hosted client executes requested tools locally and returns their results over the socket. |
 
 ---
 
@@ -279,20 +372,20 @@ targets the places where a bug would be **silent** rather than loud.
 
 ```sh
 # Is the ⌥ hotkey getting through macOS at all?
-./venv/bin/python hotkey.py
+./venv/bin/python src/hotkey.py
 
 # Silence detection — talk, then stop, and watch it decide
-./venv/bin/python audio.py
+./venv/bin/python src/audio.py
 
 # Speech-to-text (no credentials needed)
 say -o /tmp/t.wav --data-format=LEF32@16000 "buy five shares of nvidia"
-./venv/bin/python -c "import transcribe; print(transcribe.transcribe('/tmp/t.wav'))"
+PYTHONPATH=src ./venv/bin/python -c "import transcribe; print(transcribe.transcribe('/tmp/t.wav'))"
 
 # SnapTrade auth + data
-./venv/bin/python -c "import snaptrade_client_wrapper as st; print(st.find_overlap())"
+PYTHONPATH=src ./venv/bin/python -c "import snaptrade_client_wrapper as st; print(st.find_overlap())"
 
 # Claude + tools + web search, skipping audio entirely
-./venv/bin/python assistant.py "do I own NVDA in more than one account"
+./venv/bin/python src/assistant.py "do I own NVDA in more than one account"
 ```
 
 That last one prints the tool calls, the sources, the latency and the **cost in dollars** for the
@@ -307,7 +400,9 @@ question. A trade is about 4¢; a research question with web search, about 7¢.
 | **`trading.py`** | **The only code that can move money.** Propose → confirm. Every guard lives here. |
 | **`tools.py`** | The model's entire reach: 17 tool schemas and the dispatch map. Nothing here executes. |
 | `snaptrade_client_wrapper.py` | Every SnapTrade call, normalised to plain dicts. Account resolution, cross-account aggregation, a 20s read cache. |
-| `assistant.py` | The Claude loop: streaming, tool cycle, prompt caching, cost accounting. |
+| `assistant.py` | Chooses hosted mode or the local-development Claude loop. |
+| `backend/` | Hosted Claude/web-search loop, invite sessions, protocol validation, and limits. |
+| `backend_client.py` | Authenticated WebSocket client; executes allowlisted tools on the Mac. |
 | `main.py` | Menubar app; the trigger state machine, routing, and reporting fills. |
 | `hotkey.py` | Hold-⌥-to-talk, system-wide; the Accessibility check. |
 | `audio.py` | Mic capture and adaptive silence detection. |
@@ -315,25 +410,24 @@ question. A trade is about 4¢; a research question with web search, about 7¢.
 | `ui.py` | The floating panel (`NSPanel` + vibrancy + `WKWebView`). |
 | `panel.html` | Everything the panel draws — waveform, confirm cards, account picker, holdings. |
 | `state.py` | Thread-safe handoff: workers mutate it, a main-thread timer reads it. |
-| `config.py` | Loads `.env`, fails loudly if a key is missing. |
+| `config.py` | Loads local-development keys or the hosted-service URL. |
 | `connect.py` | Opens the SnapTrade portal with **trading** enabled. |
 
 ---
 
 ## Notes
 
-- Uses SnapTrade's **Personal** account model, where `user_id` / `user_secret` are the literal
-  string `"personal"` rather than per-end-user values. A multi-user build would use the real
-  registration flow.
+- Personal OAuth uses authorization code + PKCE, stores rotating tokens in the Keychain, and is
+  read-only while SnapTrade exposes only the `read` scope. The Personal-key fallback uses the
+  literal `"personal"` user ID/secret and is retained for trade-enabled development.
 - **AppKit is main-thread only.** Worker threads never touch the UI — they mutate `state.py` and a
   timer on the main thread pushes it into the panel. Every threading bug in this app came from
   breaking that rule.
 - Whisper runs on **CTranslate2** (`faster-whisper`), not PyTorch. Same model, same accuracy, ~4×
   faster on CPU, and it keeps 491 MB of torch out of the venv.
-- Apple's `SFSpeechRecognizer` would be lighter still and was tried first. It does not work from a
-  plain script: Speech Recognition is TCC-gated and macOS has no app bundle to attribute the
-  permission to, so the request hangs with no dialog and no error. It becomes available if this is
-  ever packaged as a real `.app`.
+- Apple's `SFSpeechRecognizer` would be lighter still and was tried first. It did not work from a
+  plain script because Speech Recognition is TCC-gated. Snappy currently keeps the proven local
+  `faster-whisper` path in both source and packaged builds.
 
 ## Things found in SnapTrade along the way
 

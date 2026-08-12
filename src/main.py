@@ -11,11 +11,14 @@ recording its own voice and talking itself out of its own trade.
 Run with:  ./venv/bin/python main.py
 """
 
+import fcntl
 import os
+import signal
 import subprocess
 import sys
 import threading
 import time
+import webbrowser
 
 import AppKit
 import objc
@@ -23,7 +26,9 @@ import rumps
 from Foundation import NSObject
 
 import audio
+import access
 import auth
+import backend_client
 import config
 import hotkey
 import snaptrade_client_wrapper as st
@@ -47,6 +52,28 @@ if getattr(sys, "frozen", False):
 else:
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # src/ -> repo root
     ASSETS = os.path.join(ROOT, "assets")
+
+_instance_lock = None
+
+
+def acquire_instance_lock(path=None):
+    """Allow only one Snappy process across source and every packaged copy."""
+    global _instance_lock
+    if _instance_lock is not None:
+        return True
+    path = path or os.path.expanduser(
+        "~/Library/Application Support/Snappy/instance.lock"
+    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    handle = open(path, "a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return False
+    _instance_lock = handle
+    return True
+
 MARKS = {
     "idle": "menubar-idle@2x.png",
     "listening": "menubar-listening@2x.png",
@@ -64,6 +91,7 @@ SYMBOLS = {
 ACCESSIBILITY_PANE = (
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 )
+SNAPTRADE_DASHBOARD = "https://dashboard.snaptrade.com/"
 
 # Recordings that end when you stop talking. A held ⌥ is the exception — that one
 # sends on release.
@@ -198,6 +226,14 @@ class _StatusTarget(NSObject):
             self.app.left_click()
 
 
+def _show_context_menu(menu, event, view):
+    AppKit.NSMenu.popUpContextMenu_withEvent_forView_(menu, event, view)
+
+
+def _current_event():
+    return AppKit.NSApp.currentEvent()
+
+
 class Snappy(rumps.App):
     def __init__(self):
         super().__init__("Snappy", quit_button="Quit")
@@ -208,9 +244,11 @@ class Snappy(rumps.App):
         self.icon_state = None
         self.marks = {}  # status -> NSImage, loaded once
         self.target = None  # strong ref: PyObjC won't retain the click target
-
+        # rumps installs its own Mach SIGINT hook inside run(). Replace it afterward;
+        # that hook can leave a source-launched app alive after Ctrl+C.
+        rumps.events.before_start.register(self.enable_terminal_quit)
         self.menu = ["Ask Snappy", "Show panel", None, "Sign in with SnapTrade", None]
-        state.update(auth_mode=st.mode())
+        state.update(auth_mode=st.mode(), oauth_available=auth.signed_in())
 
         # The panel can't be built here: rumps hasn't created NSApplication yet,
         # and a window made before AppKit is ready never gets displayed. Build it
@@ -231,6 +269,7 @@ class Snappy(rumps.App):
         ui.set_on_trade(self.confirm_from_panel, self.cancel_from_panel)
         ui.set_on_account(self.account_from_panel)
         ui.set_on_signin(self.start_oauth_signin)
+        ui.set_on_access(self.change_access)
 
         item = self._nsapp.nsstatusitem
         self.menu_ref = item.menu()  # keep it; we re-attach it for right-clicks
@@ -255,9 +294,13 @@ class Snappy(rumps.App):
 
     def popup_menu(self):
         item = self._nsapp.nsstatusitem
-        item.setMenu_(self.menu_ref)
-        item.button().performClick_(None)
-        item.setMenu_(None)  # back to click-to-talk
+        # Show a real blocking context menu. Temporarily attaching the menu and then
+        # immediately detaching it races menu selection, including the Quit item.
+        _show_context_menu(self.menu_ref, _current_event(), item.button())
+
+    def enable_terminal_quit(self):
+        """Make Ctrl+C reliably terminate a source-launched menubar app."""
+        signal.signal(signal.SIGINT, lambda *_: rumps.quit_application())
 
     # --- UI ----------------------------------------------------------------
     # AppKit must only be touched from the main thread. Worker threads mutate
@@ -279,7 +322,13 @@ class Snappy(rumps.App):
         # can change at runtime and the lookup key stays whatever it was at creation.
         item = self.menu.get("Sign in with SnapTrade")
         if item is not None:
-            label = "Sign out of SnapTrade" if st.mode() == "oauth" else "Sign in with SnapTrade"
+            current_mode = state.STATE.get("auth_mode")
+            if current_mode == "oauth":
+                label = "Sign out of SnapTrade"
+            elif state.STATE.get("oauth_available"):
+                label = "Use read-only OAuth"
+            else:
+                label = "Sign in with SnapTrade"
             if item.title != label:
                 item.title = label
 
@@ -379,6 +428,8 @@ class Snappy(rumps.App):
             return
         try:
             book = st.get_all_holdings()
+            connections = st.list_connections()
+            by_connection = {c["connection_id"]: c for c in connections}
             state.update(
                 total_value=book["net_worth"],
                 cash=book["total_cash"],
@@ -390,6 +441,10 @@ class Snappy(rumps.App):
                 accounts=[
                     {
                         "account_id": a["account_id"],
+                        "connection_id": a.get("connection_id"),
+                        "connection_type": (
+                            by_connection.get(a.get("connection_id"), {}).get("type") or "read"
+                        ),
                         "label": a["label"],
                         "cash": a.get("cash"),
                         "holdings_value": a.get("holdings_value"),
@@ -399,6 +454,11 @@ class Snappy(rumps.App):
                         "error": a.get("error"),
                     }
                     for a in book["accounts"]
+                ],
+                connections=connections,
+                connection_health=[
+                    {key: value for key, value in c.items() if key != "created"}
+                    for c in connections
                 ],
                 unsynced=[
                     gap
@@ -488,8 +548,46 @@ class Snappy(rumps.App):
     def toggle_snaptrade_auth(self, _):
         if st.mode() == "oauth":
             self.do_signout()
+        elif auth.signed_in():
+            access.set_preferred_mode("oauth")
+            st.connect(force="oauth")
+            state.update(auth_mode="oauth", oauth_available=True)
+            notify("Using read-only OAuth.")
+            threading.Thread(target=self.refresh_portfolio, daemon=True).start()
         else:
             self.start_oauth_signin()
+
+    @rumps.clicked("Connect Snappy service")
+    def connect_hosted_service(self, _):
+        if not config.BACKEND_URL:
+            notify("This build has no hosted service configured.")
+            return
+        if backend_client.signed_in():
+            backend_client.sign_out()
+            notify("Disconnected from the Snappy service.")
+            return
+        response = rumps.Window(
+            title="Connect Snappy",
+            message="Enter your one-time invite code.",
+            default_text="",
+            ok="Connect",
+            cancel="Cancel",
+        ).run()
+        if response.clicked and response.text.strip():
+            threading.Thread(
+                target=self._redeem_backend_invite,
+                args=(response.text.strip(),),
+                daemon=True,
+            ).start()
+
+    def _redeem_backend_invite(self, code):
+        try:
+            backend_client.redeem_invite(code)
+        except Exception as exc:
+            print("ERROR connecting hosted service:", exc)
+            notify(str(exc))
+            return
+        notify("Connected to the Snappy service.")
 
     # --- SnapTrade sign-in ---------------------------------------------------
     # One click, in the panel or the menu, either drives the same flow: open the
@@ -515,10 +613,9 @@ class Snappy(rumps.App):
             notify("Sign-in failed — see the terminal for details.")
             return
 
-        # Rebuild the SnapTrade client now that a token exists — mode() will pick
-        # OAuth up because auth.signed_in() is now true.
+        access.set_preferred_mode("oauth")
         st.connect()
-        state.update(signing_in=False, auth_mode=st.mode())
+        state.update(signing_in=False, auth_mode=st.mode(), oauth_available=True)
         notify("Connected to SnapTrade.")
         self.refresh_portfolio()
 
@@ -527,10 +624,125 @@ class Snappy(rumps.App):
         st.connect()
         state.update(
             auth_mode=st.mode(),
+            oauth_available=False,
             total_value=None, cash=None, holdings_value=None,
             positions=[], accounts=[], account_count=1,
         )
         notify("Signed out of SnapTrade.")
+
+    # --- brokerage permissions --------------------------------------------
+
+    def change_access(self, target, connection_id):
+        """Open SnapTrade's reauthorization flow for this exact connection."""
+        if state.STATE.get("permission_changing"):
+            return
+
+        # Permission changes must use keys explicitly supplied for the currently signed-in
+        # Personal account. Development keys from `.env` may belong to a different account
+        # and must never be silently paired with an OAuth connection ID.
+        if target == "trade" and not access.saved_personal_keys():
+            if state.STATE.get("key_setup_connection") != connection_id:
+                webbrowser.open(SNAPTRADE_DASHBOARD)
+                state.update(
+                    key_setup_connection=connection_id,
+                    notice=(
+                        "SnapTrade opened. Create or view your Personal API key, "
+                        "then return and click Continue setup."
+                    ),
+                )
+                return
+            client = rumps.Window(
+                title="Enable full permission",
+                message=(
+                    "SnapTrade OAuth is read-only. Enter your Personal Client ID; "
+                    "it will be stored in the macOS Keychain."
+                ),
+                ok="Next", cancel="Cancel", dimensions=(360, 24),
+            ).run()
+            if not client.clicked or not client.text.strip():
+                return
+            secret = rumps.Window(
+                title="Consumer Key",
+                message="Enter your Personal Consumer Key. It is stored only in Keychain.",
+                ok="Continue", cancel="Cancel", dimensions=(360, 24), secure=True,
+            ).run()
+            if not secret.clicked or not secret.text.strip():
+                return
+            try:
+                access.save_personal_keys(client.text, secret.text)
+                state.update(key_setup_connection=None)
+            except Exception as exc:
+                notify(f"Couldn't save SnapTrade credentials: {exc}")
+                return
+
+        previous = st.mode()
+        trading.cancel()
+        state.update(
+            permission_changing=connection_id,
+            notice="Opening SnapTrade to change this connection's permission…",
+        )
+        threading.Thread(
+            target=self._change_access,
+            args=(target, connection_id, previous),
+            daemon=True,
+        ).start()
+
+    def _change_access(self, target, connection_id, previous):
+        try:
+            # Signed portal requests require the Personal key even when the requested
+            # end state is read-only. OAuth cannot create or modify connections.
+            access.set_preferred_mode("keys")
+            st.connect(force="keys")
+            current = next(
+                (c for c in st.list_connections() if c["connection_id"] == connection_id),
+                None,
+            )
+            if current is None:
+                access.forget_personal_keys()
+                state.update(key_setup_connection=None)
+                raise RuntimeError(
+                    "Those Personal API keys don't match the signed-in SnapTrade account. "
+                    "Click Read only again and enter keys from this account."
+                )
+
+            if (current.get("type") or "read").lower() != target:
+                webbrowser.open(st.connection_permission_url(connection_id, target))
+                deadline = time.time() + 300
+                while time.time() < deadline:
+                    time.sleep(5)
+                    current = next(
+                        (c for c in st.list_connections()
+                         if c["connection_id"] == connection_id),
+                        None,
+                    )
+                    if current and (current.get("type") or "read").lower() == target:
+                        break
+                else:
+                    raise RuntimeError("Permission change timed out; complete it and try again.")
+
+            if target == "read" and auth.signed_in():
+                access.set_preferred_mode("oauth")
+                st.connect(force="oauth")
+            state.update(
+                auth_mode=st.mode(), oauth_available=auth.signed_in(),
+                permission_changing=None,
+                notice=("Full permission enabled." if target == "trade"
+                        else "Read-only permission enabled."),
+            )
+            self.refresh_portfolio()
+        except Exception as exc:
+            print("ERROR changing permission:", exc)
+            if previous in ("oauth", "keys"):
+                try:
+                    access.set_preferred_mode(previous)
+                    st.connect(force=previous)
+                except Exception:
+                    pass
+            state.update(
+                permission_changing=None, auth_mode=st.mode(),
+                oauth_available=auth.signed_in(),
+            )
+            notify(f"Couldn't change permission: {exc}")
 
     # --- recording ---------------------------------------------------------
 
@@ -794,6 +1006,9 @@ def _build():
 
 
 if __name__ == "__main__":
+    if not acquire_instance_lock():
+        print("Snappy is already running. Quit the existing copy first.")
+        raise SystemExit(1)
     print(f"Snappy — build {_build()}, model {config.CLAUDE_MODEL}")
     print("Hold right ⌥ to talk. Right-click the icon to quit.\n")
     Snappy().run()

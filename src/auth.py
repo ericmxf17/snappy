@@ -188,12 +188,27 @@ class _Catcher(http.server.BaseHTTPRequestHandler):
         pass  # don't spray the console with request logs
 
 
+class _LoopbackServer(http.server.ThreadingHTTPServer):
+    """Keep callback cleanup independent of the browser's HTTP connection.
+
+    Safari can keep the callback request alive after rendering the success page. A
+    single-threaded HTTPServer then leaves serve_forever() inside that request while
+    sign_in() waits in shutdown(), so the authorization code is never exchanged.
+    The accept loop must be separate from request cleanup.
+    """
+
+    daemon_threads = True
+
+
 def _listen():
     """Bind the first free registered port. Returns (server, port)."""
     for port in PORTS:
         try:
-            server = http.server.HTTPServer(("127.0.0.1", port), _Catcher)
-            return server, port
+            server = _LoopbackServer(("127.0.0.1", port), _Catcher)
+            # Usually this is the registered port requested above. Tests can set
+            # PORTS=(0,) to ask the OS for an isolated ephemeral port, so return the
+            # address that was actually bound rather than echoing the request.
+            return server, server.server_address[1]
         except OSError:
             continue  # in use — try the next one we registered
     raise AuthError(
