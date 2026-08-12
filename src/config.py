@@ -13,7 +13,8 @@ So this module must NOT die at import when SNAPTRADE_* is absent: that is the no
 expected state for someone who installed the .dmg and signed in with OAuth. It used to
 raise a KeyError there, which would have made "one-click install" impossible.
 
-ANTHROPIC_API_KEY is still required, because Snappy is nothing without a model.
+Claude can run locally for development or through the hosted backend. A packaged
+client therefore needs no Anthropic key.
 """
 
 import os
@@ -46,15 +47,15 @@ load_dotenv(_SUPPORT_ENV, override=True)
 SNAPTRADE_CLIENT_ID = os.environ.get("SNAPTRADE_CLIENT_ID") or None
 SNAPTRADE_CONSUMER_KEY = os.environ.get("SNAPTRADE_CONSUMER_KEY") or None
 
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or None
+BACKEND_URL = os.environ.get("SNAPPY_BACKEND_URL") or None
+BACKEND_INVITE = os.environ.get("SNAPPY_BACKEND_INVITE") or None
 
 # Personal (non-commercial) SnapTrade accounts use these literal placeholders
 # instead of a per-end-user id/secret pair. Unused in OAuth mode: a bearer token
 # already says who you are.
 SNAPTRADE_USER_ID = "personal"
 SNAPTRADE_USER_SECRET = "personal"
-
-HAS_KEYS = bool(SNAPTRADE_CLIENT_ID and SNAPTRADE_CONSUMER_KEY)
 
 # Tests must not depend on whether the developer happens to be signed in to OAuth on this
 # Mac — the Keychain is real, shared, machine-wide state. conftest pins this to "keys".

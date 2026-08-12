@@ -11,3 +11,4 @@ assets/candidates/
 build/
 dist/
 *.dmg
+*.db

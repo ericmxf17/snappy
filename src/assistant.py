@@ -13,7 +13,8 @@ import config
 import state
 from tools import TOOLS, WEB_FETCH, WEB_SEARCH, run_tool
 
-_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+_client = (anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+           if config.ANTHROPIC_API_KEY else None)
 
 MAX_TURNS = 8  # a runaway search loop shouldn't be able to hang a live demo
 
@@ -265,7 +266,7 @@ def _stream_turn(messages, container, on_text):
         return stream.get_final_message(), container
 
 
-def answer(transcript: str, on_text=None, on_reset=None) -> str:
+def _local_answer(transcript: str, on_text=None, on_reset=None) -> str:
     """Run the question to completion. Returns the final answer text.
 
     on_text   — each chunk of the answer, as it streams.
@@ -344,6 +345,16 @@ def answer(transcript: str, on_text=None, on_reset=None) -> str:
         _move_cache_breakpoint(messages)
 
     return "".join(turn_text).strip() or "Sorry, I didn't catch that."
+
+
+def answer(transcript: str, on_text=None, on_reset=None) -> str:
+    """Use the hosted agent when configured; retain local mode for development."""
+    if config.BACKEND_URL:
+        from backend_client import answer as hosted_answer
+        return hosted_answer(transcript, on_text=on_text, on_reset=on_reset)
+    if not _client:
+        raise RuntimeError("Set SNAPPY_BACKEND_URL or ANTHROPIC_API_KEY.")
+    return _local_answer(transcript, on_text=on_text, on_reset=on_reset)
 
 
 def headline(text: str) -> str:

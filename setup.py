@@ -86,6 +86,7 @@ OPTIONS = {
         "numpy",
         "dotenv",
         "requests",
+        "websockets",
         "charset_normalizer",
     ],
     "includes": [
