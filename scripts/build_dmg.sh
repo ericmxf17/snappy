@@ -14,6 +14,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+PYTHON="./venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "Missing venv. Create it with: uv venv --python 3.12 venv" >&2
+  exit 1
+fi
+
+# py2app must already be present as a normal requirement. Do not use setup_requires:
+# uv virtual environments may intentionally omit pip, and setuptools' legacy installer
+# crashes while trying to run `python -m pip` in those environments.
+if ! "$PYTHON" -c 'import py2app' >/dev/null 2>&1; then
+  echo "Missing build dependencies. Run:" >&2
+  echo "  VIRTUAL_ENV=\"$PWD/venv\" uv pip install -r requirements.txt" >&2
+  exit 1
+fi
+
 rm -rf build dist
 mkdir -p dist
 
@@ -26,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-./venv/bin/python setup.py py2app \
+"$PYTHON" setup.py py2app \
   --bdist-base "$BUILD_TMP_DIR/build" \
   --dist-dir "$BUILD_TMP_DIR/dist"
 

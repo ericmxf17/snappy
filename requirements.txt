@@ -25,3 +25,7 @@ websockets
 
 # Tests. They run offline with no credentials — nothing here reaches the network.
 pytest
+
+# macOS packaging. Keep this explicit: setup_requires tries to invoke `pip` from
+# inside uv-created environments, which intentionally may not include pip.
+py2app==0.28.10
