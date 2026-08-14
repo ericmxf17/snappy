@@ -9,6 +9,11 @@ def test_py2app_is_an_explicit_pinned_requirement():
     assert "py2app==0.28.10" in requirements
 
 
+def test_snaptrade_sdk_runtime_contract_is_pinned():
+    requirements = (ROOT / "requirements.txt").read_text()
+    assert "snaptrade-python-sdk==11.0.212" in requirements
+
+
 def test_setup_does_not_use_legacy_setup_requires():
     setup = (ROOT / "setup.py").read_text()
     assert "setup_requires" not in setup

@@ -1,5 +1,7 @@
 anthropic
-snaptrade-python-sdk
+# 13.x replaced the constructor with a required `auth=` API and crashes Snappy during
+# packaged startup. Pin the SDK contract the wrapper is implemented and tested against.
+snaptrade-python-sdk==11.0.212
 
 # Whisper on the CTranslate2 runtime instead of PyTorch. Same model, same accuracy,
 # ~4x faster on CPU — and it drops a 491 MB dependency. (openai-whisper pulled in
