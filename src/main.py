@@ -476,6 +476,18 @@ class Snappy(rumps.App):
             transcribe.set_hints([p["symbol"] for p in book["combined_holdings"]])
         except st.NoAccountsError:
             return
+        except auth.OAuthClientRestricted as e:
+            # A browser consent page is not proof of API access. Dynamic registrations
+            # can mint MCP-only tokens that direct REST endpoints reject with code 1083.
+            auth.sign_out()
+            st.connect()
+            state.update(
+                signing_in=False, auth_mode=st.mode(), oauth_available=False,
+                total_value=None, cash=None, holdings_value=None,
+                positions=[], accounts=[], connections=[],
+                notice=str(e),
+            )
+            print("portfolio refresh failed:", e)
         except Exception as e:
             print("portfolio refresh failed:", e)
 
@@ -603,6 +615,20 @@ class Snappy(rumps.App):
     def _do_signin(self):
         try:
             auth.sign_in()
+            # Validate the bearer token against the API before claiming success. The
+            # OAuth token endpoint also serves MCP-only clients, whose tokens cannot
+            # read /accounts or /authorizations directly.
+            st.connect(force="oauth")
+            st.list_connections()
+        except auth.OAuthClientRestricted as e:
+            auth.sign_out()
+            st.connect()
+            state.update(
+                signing_in=False, auth_mode=st.mode(), oauth_available=False,
+                notice=str(e),
+            )
+            notify(str(e))
+            return
         except auth.AuthError as e:
             state.update(signing_in=False)
             notify(f"Sign-in failed: {e}")
@@ -614,7 +640,7 @@ class Snappy(rumps.App):
             return
 
         access.set_preferred_mode("oauth")
-        st.connect()
+        st.connect(force="oauth")
         state.update(signing_in=False, auth_mode=st.mode(), oauth_available=True)
         notify("Connected to SnapTrade.")
         self.refresh_portfolio()

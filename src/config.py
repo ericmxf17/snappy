@@ -18,6 +18,7 @@ client therefore needs no Anthropic key.
 """
 
 import os
+import plistlib
 import sys
 
 from dotenv import load_dotenv
@@ -40,12 +41,26 @@ else:
 
 _SUPPORT_ENV = os.path.expanduser("~/Library/Application Support/Snappy/.env")
 
-load_dotenv(os.path.join(_ROOT, ".env"))
-load_dotenv(_SUPPORT_ENV, override=True)
+# Clean-room runs use the same credential-free state as a newly installed DMG.
+if os.environ.get("SNAPPY_IGNORE_LOCAL_ENV") != "1":
+    load_dotenv(os.path.join(_ROOT, ".env"))
+    load_dotenv(_SUPPORT_ENV, override=True)
 
 # Optional: absent means "this user signs in with OAuth", not "this user is broken".
 SNAPTRADE_CLIENT_ID = os.environ.get("SNAPTRADE_CLIENT_ID") or None
 SNAPTRADE_CONSUMER_KEY = os.environ.get("SNAPTRADE_CONSUMER_KEY") or None
+# Public OAuth client ID for a SnapTrade-approved desktop application. Dynamic clients
+# are currently classified as MCP-only and receive API error 1083 on direct reads.
+_BUNDLED_OAUTH_CLIENT_ID = None
+if getattr(sys, "frozen", False):
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(sys.executable)), "Info.plist"), "rb") as f:
+            _BUNDLED_OAUTH_CLIENT_ID = plistlib.load(f).get("SnappyOAuthClientID")
+    except (OSError, plistlib.InvalidFileException):
+        pass
+SNAPTRADE_OAUTH_CLIENT_ID = (
+    os.environ.get("SNAPTRADE_OAUTH_CLIENT_ID") or _BUNDLED_OAUTH_CLIENT_ID or None
+)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or None
 BACKEND_URL = os.environ.get("SNAPPY_BACKEND_URL") or None

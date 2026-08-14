@@ -12,9 +12,10 @@ With a trade-enabled Personal connection, it can also place trades. Live trading
 default; paper trades require an explicit confirmation, and the model that reads the web is
 **structurally incapable of executing anything**. SnapTrade Personal OAuth is currently read-only.
 
-> **Current status:** the packaged DMG, SnapTrade Personal OAuth flow, and hosted-agent code
-> are implemented. The hosted service is not deployed yet, so the current build still needs either
-> a local Anthropic key or a configured backend URL.
+> **Current status:** the packaged DMG, read-only Personal OAuth flow, and hosted-agent code are
+> implemented. Dynamically registered OAuth clients read account data through SnapTrade's official
+> MCP connector. The hosted service is not deployed yet, so the current build also needs a local
+> Anthropic key or configured backend URL.
 
 ---
 
@@ -169,7 +170,9 @@ Until the hosted service is deployed, put a local Anthropic key in:
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Then relaunch Snappy. OAuth users need no SnapTrade client ID or consumer key.
+Then relaunch Snappy. OAuth users enter no SnapTrade client ID or consumer key. An optional
+SnapTrade-approved `SNAPTRADE_OAUTH_CLIENT_ID` can be embedded at build time, but local and packaged
+builds otherwise register automatically and use SnapTrade's read-only MCP connector.
 
 ### Run from source
 
@@ -197,8 +200,9 @@ VIRTUAL_ENV="$PWD/venv" uv pip install -r requirements.txt
 
 `.env` is gitignored. Do not configure both unless you intentionally want hosted mode to win.
 
-Launch Snappy and choose **Sign in with SnapTrade** for read-only OAuth access. No SnapTrade API
-keys are required.
+Launch Snappy and choose **Sign in with SnapTrade** for read-only OAuth access. Dynamic OAuth
+registration is intentionally MCP-only, so Snappy routes those reads through SnapTrade's official
+MCP connector instead of sending the token to the direct REST API.
 
 **4. Optional: enable paper trading for development.** OAuth currently grants only `read`, so
 trading requires a Personal client ID/consumer key in `.env` and a trade-enabled connection:
@@ -418,8 +422,9 @@ question. A trade is about 4¢; a research question with web search, about 7¢.
 ## Notes
 
 - Personal OAuth uses authorization code + PKCE, stores rotating tokens in the Keychain, and is
-  read-only while SnapTrade exposes only the `read` scope. The Personal-key fallback uses the
-  literal `"personal"` user ID/secret and is retained for trade-enabled development.
+  read-only while SnapTrade exposes only the `read` scope. Dynamic clients use SnapTrade's MCP
+  connector; approved clients may use the direct REST API. The Personal-key fallback uses the
+  literal `"personal"` user ID/secret and supports trade-enabled development.
 - **AppKit is main-thread only.** Worker threads never touch the UI — they mutate `state.py` and a
   timer on the main thread pushes it into the panel. Every threading bug in this app came from
   breaking that rule.
