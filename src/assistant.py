@@ -18,6 +18,10 @@ _client = (anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 MAX_TURNS = 8  # a runaway search loop shouldn't be able to hang a live demo
 
+
+class ModelNotConfigured(RuntimeError):
+    """No hosted service or local Anthropic key can answer the question."""
+
 SYSTEM_PROMPT = """You are Snappy. The user speaks their question; you answer in writing, \
 on screen. You have live access to their real brokerage accounts (through SnapTrade) and to \
 the web.
@@ -353,7 +357,7 @@ def answer(transcript: str, on_text=None, on_reset=None) -> str:
         from backend_client import answer as hosted_answer
         return hosted_answer(transcript, on_text=on_text, on_reset=on_reset)
     if not _client:
-        raise RuntimeError("Set SNAPPY_BACKEND_URL or ANTHROPIC_API_KEY.")
+        raise ModelNotConfigured("Set SNAPPY_BACKEND_URL or ANTHROPIC_API_KEY.")
     return _local_answer(transcript, on_text=on_text, on_reset=on_reset)
 
 

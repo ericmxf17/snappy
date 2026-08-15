@@ -111,6 +111,12 @@ OPTIONS = {
     },
 }
 
+# OAuth client IDs are public identifiers, not secrets. Finder-launched apps do not
+# inherit the shell environment, so freeze an approved ID into Info.plist when supplied
+# to the build command.
+if os.environ.get("SNAPTRADE_OAUTH_CLIENT_ID"):
+    OPTIONS["plist"]["SnappyOAuthClientID"] = os.environ["SNAPTRADE_OAUTH_CLIENT_ID"]
+
 setup(
     name="Snappy",
     app=APP,

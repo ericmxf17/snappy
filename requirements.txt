@@ -27,6 +27,8 @@ websockets
 
 # Tests. They run offline with no credentials — nothing here reaches the network.
 pytest
+fastapi
+uvicorn[standard]
 
 # macOS packaging. Keep this explicit: setup_requires tries to invoke `pip` from
 # inside uv-created environments, which intentionally may not include pip.

@@ -32,8 +32,11 @@ import webbrowser
 
 import requests
 
+import config
+
 API_BASE = "https://api.snaptrade.com"
-DISCOVERY = f"{API_BASE}/.well-known/oauth-authorization-server"
+MCP_RESOURCE = "https://mcp.snaptrade.com/mcp"
+DISCOVERY = f"{API_BASE}/.well-known/oauth-authorization-server/mcp"
 
 # The server demands an EXACT redirect_uri match, port included — so no ephemeral ports.
 # We register a few fixed ones and bind whichever is free when the user signs in.
@@ -47,6 +50,10 @@ _meta = None                # discovery document, fetched once
 
 class AuthError(Exception):
     pass
+
+
+class OAuthClientRestricted(AuthError):
+    """The login succeeded, but this OAuth client cannot call SnapTrade's REST API."""
 
 
 # --------------------------------------------------------------------------- keychain
@@ -125,6 +132,10 @@ def scopes_supported():
 
 def _client_id():
     """Register once, then reuse. The id is public — it's the secret-less half of OAuth."""
+    # Approved desktop OAuth apps receive a stable public client ID from SnapTrade.
+    # It must win over any old dynamically registered ID saved in Keychain.
+    if config.SNAPTRADE_OAUTH_CLIENT_ID:
+        return config.SNAPTRADE_OAUTH_CLIENT_ID
     saved = _keychain_read()
     if saved.get("client_id"):
         return saved["client_id"]
@@ -231,6 +242,7 @@ def _exchange(form):
     response must be persisted every single time. Drop it once and the user is silently
     signed out the next time their access token expires, with no way to tell them why.
     """
+    form = {**form, "resource": MCP_RESOURCE}
     r = requests.post(
         _discover()["token"], data=form,
         headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=20,
@@ -274,6 +286,7 @@ def sign_in(timeout=300):
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
+        "resource": MCP_RESOURCE,
     })
 
     _Catcher.query = None

@@ -21,13 +21,19 @@ client that silently can't trade is worse than one that says so.
 import requests
 
 import auth
+import snaptrade_mcp as mcp
 
 BASE = "https://api.snaptrade.com/api/v1"
 TIMEOUT = 60  # SnapTrade stalls reads for 20-30s at random; see wrapper.prime()
+_mcp_only = False
 
 
 class ReadOnly(Exception):
     """Raised when something tries to trade over an OAuth session."""
+
+
+class UnsupportedRead(Exception):
+    """SnapTrade's MCP connector intentionally omits this direct-API read."""
 
 
 class _Response:
@@ -37,15 +43,23 @@ class _Response:
         self.body = body
 
 
-def _get(path, params=None):
-    return _call("GET", path, params=params)
+def _get(path, params=None, *, mcp_tool=None, mcp_args=None):
+    return _call("GET", path, params=params, mcp_tool=mcp_tool, mcp_args=mcp_args)
 
 
 def _post(path, params=None, json_body=None):
     return _call("POST", path, params=params, json_body=json_body)
 
 
-def _call(method, path, params=None, json_body=None):
+def _call(method, path, params=None, json_body=None, *, mcp_tool=None, mcp_args=None):
+    global _mcp_only
+    if _mcp_only:
+        if mcp_tool:
+            return _Response(mcp.call(mcp_tool, **(mcp_args or {})))
+        raise UnsupportedRead(
+            "SnapTrade's read-only OAuth connector does not provide this data. "
+            "Your sign-in is still active."
+        )
     access = auth.token()
     if not access:
         raise auth.AuthError("Not signed in to SnapTrade.")
@@ -55,6 +69,19 @@ def _call(method, path, params=None, json_body=None):
         params=params, json=json_body, timeout=TIMEOUT,
     )
     if r.status_code == 401:
+        try:
+            error = r.json()
+        except (ValueError, TypeError):
+            error = {}
+        if str(error.get("code")) == "1083":
+            if not mcp_tool:
+                _mcp_only = True
+                raise UnsupportedRead(
+                    "SnapTrade's read-only OAuth connector does not provide this data. "
+                    "Your sign-in is still active."
+                )
+            _mcp_only = True
+            return _Response(mcp.call(mcp_tool, **(mcp_args or {})))
         raise auth.AuthError("SnapTrade sign-in expired. Sign in again.")
     if r.status_code == 403:
         # The likeliest cause by far, given the scope is read-only.
@@ -68,28 +95,63 @@ def _call(method, path, params=None, json_body=None):
 
 class _AccountInformation:
     def list_user_accounts(self, **_):
-        return _get("/accounts")
+        global _mcp_only
+        if not _mcp_only:
+            try:
+                return _get("/accounts")
+            except UnsupportedRead:
+                _mcp_only = True
+        accounts = []
+        authorizations = mcp.items(mcp.call("Connections_listBrokerageAuthorizations"))
+        for authorization in authorizations:
+            authorization_id = authorization.get("id") if isinstance(authorization, dict) else None
+            if authorization_id:
+                accounts.extend(mcp.items(mcp.call(
+                    "Connections_listBrokerageAuthorizationAccounts",
+                    authorization_id=authorization_id,
+                )))
+        return _Response(accounts)
 
     def get_user_account_balance(self, account_id, **_):
-        return _get(f"/accounts/{account_id}/balances")
+        return _get(
+            f"/accounts/{account_id}/balances",
+            mcp_tool="AccountInformation_getUserAccountBalance",
+            mcp_args={"account_id": account_id},
+        )
 
     def get_all_account_positions(self, account_id, **_):
         # The legacy /positions endpoint now returns 410 for newer users. This is
         # SnapTrade's unified replacement (equities, options, crypto, futures).
-        return _get(f"/accounts/{account_id}/positions/all")
+        return _get(
+            f"/accounts/{account_id}/positions/all",
+            mcp_tool="AccountInformation_getAllAccountPositions",
+            mcp_args={"account_id": account_id},
+        )
 
     def get_user_account_orders(self, account_id, **kw):
         params = {}
         # The SDK spells it `state`; keep the same door so the wrapper needs no special case.
         if kw.get("state"):
             params["state"] = kw["state"]
-        return _get(f"/accounts/{account_id}/orders", params=params)
+        return _get(
+            f"/accounts/{account_id}/orders", params=params,
+            mcp_tool="AccountInformation_getUserAccountOrdersV2",
+            mcp_args={"account_id": account_id, "state": kw.get("state")},
+        )
 
     def get_account_activities(self, account_id, **_):
-        return _get(f"/accounts/{account_id}/activities")
+        return _get(
+            f"/accounts/{account_id}/activities",
+            mcp_tool="AccountInformation_getAccountActivities",
+            mcp_args={"account_id": account_id},
+        )
 
     def get_account_balance_history(self, account_id, **_):
-        return _get(f"/accounts/{account_id}/balanceHistory")
+        return _get(
+            f"/accounts/{account_id}/balanceHistory",
+            mcp_tool="AccountInformation_getAccountBalanceHistory",
+            mcp_args={"account_id": account_id},
+        )
 
     def get_user_account_return_rates(self, account_id, **_):
         return _get(f"/accounts/{account_id}/returnRates")
@@ -101,12 +163,18 @@ class _ReferenceData:
         return _post(f"/accounts/{account_id}/symbols", json_body={"substring": substring})
 
     def list_all_brokerages(self, **_):
-        return _get("/brokerages")
+        return _get(
+            "/brokerages",
+            mcp_tool="list_supported_brokerages",
+        )
 
 
 class _Connections:
     def list_brokerage_authorizations(self, **_):
-        return _get("/authorizations")
+        return _get(
+            "/authorizations",
+            mcp_tool="Connections_listBrokerageAuthorizations",
+        )
 
 
 class _Trading:

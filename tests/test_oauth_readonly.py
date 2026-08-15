@@ -96,7 +96,7 @@ def test_bearer_client_uses_unified_positions_endpoint(monkeypatch):
     paths = []
     monkeypatch.setattr(
         bearer, "_get",
-        lambda path, params=None: paths.append(path) or bearer._Response({"results": []}),
+        lambda path, params=None, **kwargs: paths.append(path) or bearer._Response({"results": []}),
     )
 
     bearer.BearerClient().account_information.get_all_account_positions("account-id")
@@ -109,13 +109,119 @@ def test_bearer_client_lists_connections(monkeypatch):
     paths = []
     monkeypatch.setattr(
         bearer, "_get",
-        lambda path, params=None: paths.append(path) or bearer._Response([]),
+        lambda path, params=None, **kwargs: paths.append(path) or bearer._Response([]),
     )
 
     response = bearer.BearerClient().connections.list_brokerage_authorizations()
 
     assert paths == ["/authorizations"]
     assert response.body == []
+
+
+def test_mcp_only_oauth_token_falls_back_to_official_connector(monkeypatch):
+    class Response:
+        status_code = 401
+
+        def json(self):
+            return {
+                "code": "1083",
+                "detail": "This OAuth client is registered for MCP access only",
+            }
+
+    monkeypatch.setattr(auth, "token", lambda: "token")
+    monkeypatch.setattr(bearer.requests, "request", lambda *args, **kwargs: Response())
+    calls = []
+    monkeypatch.setattr(
+        bearer.mcp, "call",
+        lambda name, **kwargs: calls.append((name, kwargs)) or [{"id": "connection"}],
+    )
+    monkeypatch.setattr(bearer, "_mcp_only", False)
+
+    response = bearer.BearerClient().connections.list_brokerage_authorizations()
+
+    assert response.body == [{"id": "connection"}]
+    assert calls == [("Connections_listBrokerageAuthorizations", {})]
+    assert bearer._mcp_only is True
+
+
+def test_mcp_only_unsupported_read_does_not_claim_signin_expired(monkeypatch):
+    monkeypatch.setattr(bearer, "_mcp_only", True)
+    monkeypatch.setattr(
+        bearer.requests, "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("MCP-only clients must not retry unsupported reads over REST")
+        ),
+    )
+
+    with pytest.raises(bearer.UnsupportedRead) as exc:
+        bearer.BearerClient().trading.get_user_account_quotes("account", "AAPL")
+
+    assert "sign-in is still active" in str(exc.value)
+
+
+def test_mcp_only_supported_brokerages_uses_connector(monkeypatch):
+    monkeypatch.setattr(bearer, "_mcp_only", True)
+    calls = []
+    monkeypatch.setattr(
+        bearer.mcp, "call",
+        lambda name, **kwargs: calls.append((name, kwargs)) or [{"name": "Alpaca"}],
+    )
+
+    response = bearer.BearerClient().reference_data.list_all_brokerages()
+
+    assert response.body == [{"name": "Alpaca"}]
+    assert calls == [("list_supported_brokerages", {})]
+
+
+def test_approved_oauth_client_id_overrides_dynamic_registration(monkeypatch):
+    monkeypatch.setattr(auth.config, "SNAPTRADE_OAUTH_CLIENT_ID", "approved-client")
+    monkeypatch.setattr(
+        auth.requests, "post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("dynamic registration should not run")
+        ),
+    )
+
+    assert auth._client_id() == "approved-client"
+
+
+def test_signin_validates_api_access_before_reporting_connected(monkeypatch, state_reset):
+    import main
+
+    signed_out = []
+    notices = []
+    monkeypatch.setattr(main.auth, "sign_in", lambda: "token")
+    monkeypatch.setattr(main.auth, "sign_out", lambda: signed_out.append(True))
+    monkeypatch.setattr(main.st, "connect", lambda force=None: None)
+    monkeypatch.setattr(
+        main.st, "list_connections",
+        lambda: (_ for _ in ()).throw(main.auth.OAuthClientRestricted("MCP-only client")),
+    )
+    monkeypatch.setattr(main.st, "mode", lambda: None)
+    monkeypatch.setattr(main, "notify", notices.append)
+
+    main.Snappy._do_signin(object())
+
+    assert signed_out == [True]
+    assert notices == ["MCP-only client"]
+    assert state_reset.STATE["oauth_available"] is False
+    assert state_reset.STATE["auth_mode"] is None
+
+
+def test_signin_timeout_replaces_stale_opening_notice(monkeypatch, state_reset):
+    import main
+
+    monkeypatch.setattr(
+        main.auth, "sign_in",
+        lambda: (_ for _ in ()).throw(main.auth.AuthError("timed out waiting for consent.")),
+    )
+    monkeypatch.setattr(main, "notify", lambda _message: None)
+    state_reset.update(signing_in=True, notice="Opening your browser…")
+
+    main.Snappy._do_signin(object())
+
+    assert state_reset.STATE["signing_in"] is False
+    assert state_reset.STATE["notice"] == "Sign-in failed: timed out waiting for consent."
 
 
 def test_keys_mode_can_still_trade(monkeypatch):

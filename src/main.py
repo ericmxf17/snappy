@@ -21,6 +21,7 @@ import time
 import webbrowser
 
 import AppKit
+import anthropic
 import objc
 import rumps
 from Foundation import NSObject
@@ -36,7 +37,7 @@ import state
 import trading
 import transcribe
 import ui
-from assistant import answer
+from assistant import ModelNotConfigured, answer
 
 # The Snappy mark: five bars that read as a waveform and as a bar chart at once. All
 # three states are the SAME glyph at different amplitudes — quiet, hot, flat — so the
@@ -79,6 +80,21 @@ MARKS = {
     "listening": "menubar-listening@2x.png",
     "thinking": "menubar-thinking@2x.png",
 }
+
+
+def answer_error_message(exc):
+    """Turn model setup failures into instructions instead of a dead-end apology."""
+    if isinstance(exc, ModelNotConfigured):
+        return (
+            "Snappy needs an Anthropic API key. Add ANTHROPIC_API_KEY to "
+            "~/Library/Application Support/Snappy/.env, then relaunch Snappy."
+        )
+    if isinstance(exc, anthropic.AuthenticationError):
+        return (
+            "Anthropic rejected the configured API key. Update ANTHROPIC_API_KEY in "
+            "~/Library/Application Support/Snappy/.env, then relaunch Snappy."
+        )
+    return "Sorry, something went wrong."
 
 # If the assets are ever missing, fall back to Apple's stock symbols rather than
 # showing nothing at all — a menubar app you can't see is a menubar app you can't quit.
@@ -476,6 +492,18 @@ class Snappy(rumps.App):
             transcribe.set_hints([p["symbol"] for p in book["combined_holdings"]])
         except st.NoAccountsError:
             return
+        except auth.OAuthClientRestricted as e:
+            # A browser consent page is not proof of API access. Dynamic registrations
+            # can mint MCP-only tokens that direct REST endpoints reject with code 1083.
+            auth.sign_out()
+            st.connect()
+            state.update(
+                signing_in=False, auth_mode=st.mode(), oauth_available=False,
+                total_value=None, cash=None, holdings_value=None,
+                positions=[], accounts=[], connections=[],
+                notice=str(e),
+            )
+            print("portfolio refresh failed:", e)
         except Exception as e:
             print("portfolio refresh failed:", e)
 
@@ -603,18 +631,34 @@ class Snappy(rumps.App):
     def _do_signin(self):
         try:
             auth.sign_in()
+            # Validate the bearer token against the API before claiming success. The
+            # OAuth token endpoint also serves MCP-only clients, whose tokens cannot
+            # read /accounts or /authorizations directly.
+            st.connect(force="oauth")
+            st.list_connections()
+        except auth.OAuthClientRestricted as e:
+            auth.sign_out()
+            st.connect()
+            state.update(
+                signing_in=False, auth_mode=st.mode(), oauth_available=False,
+                notice=str(e),
+            )
+            notify(str(e))
+            return
         except auth.AuthError as e:
-            state.update(signing_in=False)
-            notify(f"Sign-in failed: {e}")
+            message = f"Sign-in failed: {e}"
+            state.update(signing_in=False, notice=message)
+            notify(message)
             return
         except Exception as e:
             print("ERROR signing in:", e)
-            state.update(signing_in=False)
-            notify("Sign-in failed — see the terminal for details.")
+            message = "Sign-in failed — see the terminal for details."
+            state.update(signing_in=False, notice=message)
+            notify(message)
             return
 
         access.set_preferred_mode("oauth")
-        st.connect()
+        st.connect(force="oauth")
         state.update(signing_in=False, auth_mode=st.mode(), oauth_available=True)
         notify("Connected to SnapTrade.")
         self.refresh_portfolio()
@@ -849,7 +893,7 @@ class Snappy(rumps.App):
             print(f"reply: {reply!r}")
         except Exception as e:
             print("ERROR:", e)
-            reply = "Sorry, something went wrong."
+            reply = answer_error_message(e)
             state.update(answer=reply)
 
         state.update(status="answered")

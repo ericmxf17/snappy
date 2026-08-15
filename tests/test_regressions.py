@@ -9,10 +9,34 @@ import subprocess
 import sys
 
 import pytest
-
 import state
 import tools
 import transcribe
+
+
+def test_missing_model_configuration_has_actionable_message():
+    import main
+    from assistant import ModelNotConfigured
+
+    message = main.answer_error_message(ModelNotConfigured("missing"))
+
+    assert "ANTHROPIC_API_KEY" in message
+    assert "Application Support/Snappy/.env" in message
+
+
+def test_rejected_anthropic_key_has_actionable_message():
+    import anthropic
+    import httpx
+    import main
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(401, request=request)
+    error = anthropic.AuthenticationError("invalid", response=response, body={})
+
+    message = main.answer_error_message(error)
+
+    assert "rejected" in message
+    assert "ANTHROPIC_API_KEY" in message
 
 
 # --- Whisper's prompt bled into the transcript -----------------------------
