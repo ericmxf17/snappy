@@ -32,6 +32,10 @@ class ReadOnly(Exception):
     """Raised when something tries to trade over an OAuth session."""
 
 
+class UnsupportedRead(Exception):
+    """SnapTrade's MCP connector intentionally omits this direct-API read."""
+
+
 class _Response:
     """Mimics the SDK's response object, which carries the payload in `.body`."""
 
@@ -49,8 +53,13 @@ def _post(path, params=None, json_body=None):
 
 def _call(method, path, params=None, json_body=None, *, mcp_tool=None, mcp_args=None):
     global _mcp_only
-    if _mcp_only and mcp_tool:
-        return _Response(mcp.call(mcp_tool, **(mcp_args or {})))
+    if _mcp_only:
+        if mcp_tool:
+            return _Response(mcp.call(mcp_tool, **(mcp_args or {})))
+        raise UnsupportedRead(
+            "SnapTrade's read-only OAuth connector does not provide this data. "
+            "Your sign-in is still active."
+        )
     access = auth.token()
     if not access:
         raise auth.AuthError("Not signed in to SnapTrade.")
@@ -66,7 +75,11 @@ def _call(method, path, params=None, json_body=None, *, mcp_tool=None, mcp_args=
             error = {}
         if str(error.get("code")) == "1083":
             if not mcp_tool:
-                raise auth.OAuthClientRestricted("This read is unavailable through SnapTrade MCP.")
+                _mcp_only = True
+                raise UnsupportedRead(
+                    "SnapTrade's read-only OAuth connector does not provide this data. "
+                    "Your sign-in is still active."
+                )
             _mcp_only = True
             return _Response(mcp.call(mcp_tool, **(mcp_args or {})))
         raise auth.AuthError("SnapTrade sign-in expired. Sign in again.")
@@ -86,7 +99,7 @@ class _AccountInformation:
         if not _mcp_only:
             try:
                 return _get("/accounts")
-            except auth.OAuthClientRestricted:
+            except UnsupportedRead:
                 _mcp_only = True
         accounts = []
         authorizations = mcp.items(mcp.call("Connections_listBrokerageAuthorizations"))
@@ -150,7 +163,10 @@ class _ReferenceData:
         return _post(f"/accounts/{account_id}/symbols", json_body={"substring": substring})
 
     def list_all_brokerages(self, **_):
-        return _get("/brokerages")
+        return _get(
+            "/brokerages",
+            mcp_tool="list_supported_brokerages",
+        )
 
 
 class _Connections:

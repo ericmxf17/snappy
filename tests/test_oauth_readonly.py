@@ -144,6 +144,35 @@ def test_mcp_only_oauth_token_falls_back_to_official_connector(monkeypatch):
     assert bearer._mcp_only is True
 
 
+def test_mcp_only_unsupported_read_does_not_claim_signin_expired(monkeypatch):
+    monkeypatch.setattr(bearer, "_mcp_only", True)
+    monkeypatch.setattr(
+        bearer.requests, "request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("MCP-only clients must not retry unsupported reads over REST")
+        ),
+    )
+
+    with pytest.raises(bearer.UnsupportedRead) as exc:
+        bearer.BearerClient().trading.get_user_account_quotes("account", "AAPL")
+
+    assert "sign-in is still active" in str(exc.value)
+
+
+def test_mcp_only_supported_brokerages_uses_connector(monkeypatch):
+    monkeypatch.setattr(bearer, "_mcp_only", True)
+    calls = []
+    monkeypatch.setattr(
+        bearer.mcp, "call",
+        lambda name, **kwargs: calls.append((name, kwargs)) or [{"name": "Alpaca"}],
+    )
+
+    response = bearer.BearerClient().reference_data.list_all_brokerages()
+
+    assert response.body == [{"name": "Alpaca"}]
+    assert calls == [("list_supported_brokerages", {})]
+
+
 def test_approved_oauth_client_id_overrides_dynamic_registration(monkeypatch):
     monkeypatch.setattr(auth.config, "SNAPTRADE_OAUTH_CLIENT_ID", "approved-client")
     monkeypatch.setattr(
