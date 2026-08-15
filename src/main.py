@@ -21,6 +21,7 @@ import time
 import webbrowser
 
 import AppKit
+import anthropic
 import objc
 import rumps
 from Foundation import NSObject
@@ -36,7 +37,7 @@ import state
 import trading
 import transcribe
 import ui
-from assistant import answer
+from assistant import ModelNotConfigured, answer
 
 # The Snappy mark: five bars that read as a waveform and as a bar chart at once. All
 # three states are the SAME glyph at different amplitudes — quiet, hot, flat — so the
@@ -79,6 +80,21 @@ MARKS = {
     "listening": "menubar-listening@2x.png",
     "thinking": "menubar-thinking@2x.png",
 }
+
+
+def answer_error_message(exc):
+    """Turn model setup failures into instructions instead of a dead-end apology."""
+    if isinstance(exc, ModelNotConfigured):
+        return (
+            "Snappy needs an Anthropic API key. Add ANTHROPIC_API_KEY to "
+            "~/Library/Application Support/Snappy/.env, then relaunch Snappy."
+        )
+    if isinstance(exc, anthropic.AuthenticationError):
+        return (
+            "Anthropic rejected the configured API key. Update ANTHROPIC_API_KEY in "
+            "~/Library/Application Support/Snappy/.env, then relaunch Snappy."
+        )
+    return "Sorry, something went wrong."
 
 # If the assets are ever missing, fall back to Apple's stock symbols rather than
 # showing nothing at all — a menubar app you can't see is a menubar app you can't quit.
@@ -877,7 +893,7 @@ class Snappy(rumps.App):
             print(f"reply: {reply!r}")
         except Exception as e:
             print("ERROR:", e)
-            reply = "Sorry, something went wrong."
+            reply = answer_error_message(e)
             state.update(answer=reply)
 
         state.update(status="answered")
