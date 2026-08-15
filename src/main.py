@@ -630,13 +630,15 @@ class Snappy(rumps.App):
             notify(str(e))
             return
         except auth.AuthError as e:
-            state.update(signing_in=False)
-            notify(f"Sign-in failed: {e}")
+            message = f"Sign-in failed: {e}"
+            state.update(signing_in=False, notice=message)
+            notify(message)
             return
         except Exception as e:
             print("ERROR signing in:", e)
-            state.update(signing_in=False)
-            notify("Sign-in failed — see the terminal for details.")
+            message = "Sign-in failed — see the terminal for details."
+            state.update(signing_in=False, notice=message)
+            notify(message)
             return
 
         access.set_preferred_mode("oauth")

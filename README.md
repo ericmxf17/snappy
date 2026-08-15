@@ -130,7 +130,7 @@ enough to read in one sitting.
 Build the current DMG from source:
 
 ```sh
-brew install ffmpeg portaudio
+brew install ffmpeg portaudio uv
 git clone https://github.com/ericmxf17/snappy.git
 cd snappy
 uv venv --python 3.12 venv
@@ -179,7 +179,7 @@ builds otherwise register automatically and use SnapTrade's read-only MCP connec
 **1. System dependencies** (Homebrew):
 
 ```sh
-brew install ffmpeg portaudio
+brew install ffmpeg portaudio uv
 ```
 
 **2. Python 3.12 and the venv:**

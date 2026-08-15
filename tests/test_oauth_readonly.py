@@ -179,6 +179,22 @@ def test_signin_validates_api_access_before_reporting_connected(monkeypatch, sta
     assert state_reset.STATE["auth_mode"] is None
 
 
+def test_signin_timeout_replaces_stale_opening_notice(monkeypatch, state_reset):
+    import main
+
+    monkeypatch.setattr(
+        main.auth, "sign_in",
+        lambda: (_ for _ in ()).throw(main.auth.AuthError("timed out waiting for consent.")),
+    )
+    monkeypatch.setattr(main, "notify", lambda _message: None)
+    state_reset.update(signing_in=True, notice="Opening your browser…")
+
+    main.Snappy._do_signin(object())
+
+    assert state_reset.STATE["signing_in"] is False
+    assert state_reset.STATE["notice"] == "Sign-in failed: timed out waiting for consent."
+
+
 def test_keys_mode_can_still_trade(monkeypatch):
     """The read-only guard must not have quietly disabled trading for key users."""
     monkeypatch.setattr(st, "can_trade", lambda: True)
