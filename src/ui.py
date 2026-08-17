@@ -29,6 +29,7 @@ _on_confirm = None
 _on_cancel = None
 _on_account = None
 _on_signin = None
+_on_refresh = None
 _on_access = None
 
 # Where the user dragged the panel to. Once they've moved it, that's where it
@@ -154,6 +155,9 @@ class _Bridge(NSObject):
         elif kind == "signin":  # "Sign in with SnapTrade" button
             if _on_signin:
                 _on_signin()
+        elif kind == "refresh":  # retry a failed/empty portfolio read
+            if _on_refresh:
+                _on_refresh()
         elif kind == "access":
             target = body.get("target")
             connection_id = (body.get("connection_id") or "").strip()
@@ -199,6 +203,12 @@ def set_on_signin(callback):
     """callback() — fired when the "Sign in with SnapTrade" button is clicked."""
     global _on_signin
     _on_signin = callback
+
+
+def set_on_refresh(callback):
+    """callback() — fired when the Portfolio retry button is clicked."""
+    global _on_refresh
+    _on_refresh = callback
 
 
 def set_on_access(callback):

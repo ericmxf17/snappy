@@ -368,6 +368,15 @@
                      background: var(--amber); color: #14110B; transition: opacity .12s; }
   .connect button:disabled { opacity: .55; cursor: default; }
 
+  .portfolio-problem .title { font-weight: 600; font-size: 12px; }
+  .portfolio-problem .sub { color: var(--dim); font-size: 11px; line-height: 1.55;
+                            margin: 4px 0 10px; }
+  .portfolio-problem button { width: 100%; border: 1px solid rgba(224,163,64,.45);
+                              border-radius: 8px; padding: 9px; cursor: pointer;
+                              font: 600 12px "SF Pro Text", sans-serif;
+                              background: rgba(224,163,64,.10); color: var(--amber); }
+  .portfolio-problem button:disabled { opacity: .55; cursor: default; }
+
   /* ---- notice ---------------------------------------------------------- */
   /* Snappy has no voice, so anything it would have said lands here. */
   .notice { font-size: 12px; color: var(--text); background: rgba(255,255,255,.06);
@@ -654,6 +663,29 @@
         ${signingIn ? 'Opening your browser…' : 'Sign in with SnapTrade'}
       </button>
     </div>`;
+
+  const portfolioProblemHTML = (s) => {
+    const loading = s.portfolio_status === 'loading';
+    const oauth = s.auth_mode === 'oauth';
+    if (loading) return `<div class="card portfolio-problem">
+      <div class="title">Loading your portfolio…</div>
+      <div class="sub" style="margin-bottom:0">Reading your granted SnapTrade accounts.</div>
+    </div>`;
+    if (s.portfolio_status === 'no_accounts') return `<div class="card portfolio-problem">
+      <div class="title">${oauth ? 'No accounts granted' : 'No brokerage accounts'}</div>
+      <div class="sub">${esc(s.portfolio_error || 'Choose at least one brokerage account for Snappy.')}</div>
+      <button id="${oauth ? 'btnChooseAccounts' : 'btnPortfolioRefresh'}">
+        ${oauth ? 'Choose accounts again' : 'Retry now'}
+      </button>
+    </div>`;
+    if (s.portfolio_status === 'error') return `<div class="card portfolio-problem">
+      <div class="title">Couldn’t load portfolio</div>
+      <div class="sub">${esc(s.portfolio_error || 'SnapTrade did not return your portfolio.')}</div>
+      <button id="btnPortfolioRefresh">Retry now</button>
+      ${oauth ? '<button id="btnChooseAccounts" style="margin-top:7px">Choose accounts again</button>' : ''}
+    </div>`;
+    return '';
+  };
 
   // Which account this lands in. Shown on every confirmation card: with more than one
   // account, "BUY 5 NVDA" is an incomplete description of what is about to happen.
@@ -994,7 +1026,13 @@
       // PORTFOLIO — always here, however long the conversation gets. This is the whole
       // point of the split: your holdings used to sink below a screen and a half of
       // trade confirmations.
-      feed.dataset.empty = 'No holdings yet.';
+      feed.dataset.empty = s.portfolio_status === 'ready'
+        ? 'No holdings yet.' : 'Portfolio data has not loaded.';
+
+      const problem = portfolioProblemHTML(s);
+      if (problem && (s.portfolio_status !== 'loading' || s.total_value == null)) {
+        parts.push(problem);
+      }
 
       // Accounts FIRST, collapsed. They cost two rows and they answer "where is my
       // money" — which is what the user actually could not see. Put them under seven
@@ -1031,6 +1069,10 @@
     const no = document.getElementById('btnNo');
     if (go) go.onclick = () => send({type: 'confirm'});
     if (no) no.onclick = () => send({type: 'cancel'});
+    const chooseAccounts = document.getElementById('btnChooseAccounts');
+    const portfolioRefresh = document.getElementById('btnPortfolioRefresh');
+    if (chooseAccounts) chooseAccounts.onclick = () => send({type: 'signin'});
+    if (portfolioRefresh) portfolioRefresh.onclick = () => send({type: 'refresh'});
 
     // Picking an account is not the same as agreeing to the trade — this only says
     // WHERE. The confirm card comes next, priced, and still has to be accepted.

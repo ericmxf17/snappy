@@ -264,7 +264,12 @@ class Snappy(rumps.App):
         # that hook can leave a source-launched app alive after Ctrl+C.
         rumps.events.before_start.register(self.enable_terminal_quit)
         self.menu = ["Ask Snappy", "Show panel", None, "Sign in with SnapTrade", None]
-        state.update(auth_mode=st.mode(), oauth_available=auth.signed_in())
+        auth_mode = st.mode()
+        state.update(
+            auth_mode=auth_mode,
+            oauth_available=auth.signed_in(),
+            portfolio_status="loading" if auth_mode else "idle",
+        )
 
         # The panel can't be built here: rumps hasn't created NSApplication yet,
         # and a window made before AppKit is ready never gets displayed. Build it
@@ -285,6 +290,7 @@ class Snappy(rumps.App):
         ui.set_on_trade(self.confirm_from_panel, self.cancel_from_panel)
         ui.set_on_account(self.account_from_panel)
         ui.set_on_signin(self.start_oauth_signin)
+        ui.set_on_refresh(self.retry_portfolio)
         ui.set_on_access(self.change_access)
 
         item = self._nsapp.nsstatusitem
@@ -380,8 +386,18 @@ class Snappy(rumps.App):
         """State snapshot plus the bits only the panel cares about."""
         s = state.snapshot()
         positions = s["positions"]
-        count = s.get("account_count") or 1
-        where = f"{count} accounts" if count > 1 else "Alpaca Paper"
+        accounts = s.get("accounts") or []
+        count = s.get("account_count") or len(accounts)
+        if count > 1:
+            where = f"{count} accounts"
+        elif count == 1 and accounts:
+            where = accounts[0].get("label") or "1 account"
+        elif s.get("portfolio_status") == "no_accounts":
+            where = "No accounts granted"
+        elif s.get("auth_mode"):
+            where = "SnapTrade"
+        else:
+            where = "Not connected"
 
         if positions:
             sub = f"{len(positions)} holding{'s' if len(positions) > 1 else ''} · {where}"
@@ -440,8 +456,11 @@ class Snappy(rumps.App):
         $150,000 across two brokerages — a multi-brokerage app displaying a single
         brokerage, which is the exact failure the whole project claims to fix.
         """
-        if st.mode() is None:
+        auth_mode = st.mode()
+        if auth_mode is None:
             return
+        if state.STATE.get("total_value") is None:
+            state.update(portfolio_status="loading", portfolio_error="")
         try:
             book = st.get_all_holdings()
             connections = st.list_connections()
@@ -481,6 +500,8 @@ class Snappy(rumps.App):
                     for a in book["accounts"]
                     for gap in (a.get("unsynced_fills") or [])
                 ],
+                portfolio_status="ready",
+                portfolio_error="",
                 # The panel counts up from this, so "live" is something the user can
                 # SEE rather than something we assert. A number that never moves and
                 # carries no timestamp is indistinguishable from a number that is stale.
@@ -491,7 +512,36 @@ class Snappy(rumps.App):
             # "Nvidia" and hearing "and video".
             transcribe.set_hints([p["symbol"] for p in book["combined_holdings"]])
         except st.NoAccountsError:
-            return
+            # OAuth consent can succeed while granting this app zero brokerage
+            # accounts. That is not an empty portfolio: it is an incomplete grant,
+            # and the user can fix it by running consent again.
+            try:
+                connections = st.list_connections()
+            except Exception as connection_error:
+                print("connection refresh failed:", connection_error)
+                connections = []
+            state.update(
+                total_value=None,
+                cash=None,
+                holdings_value=None,
+                positions=[],
+                accounts=[],
+                account_count=0,
+                connections=connections,
+                connection_health=[
+                    {key: value for key, value in c.items() if key != "created"}
+                    for c in connections
+                ],
+                unsynced=[],
+                updated_at=None,
+                portfolio_status="no_accounts",
+                portfolio_error=(
+                    "SnapTrade is connected, but no brokerage accounts were granted "
+                    "to Snappy. Choose accounts again and select at least one account."
+                    if auth_mode == "oauth"
+                    else "No brokerage accounts are connected to this SnapTrade account."
+                ),
+            )
         except auth.OAuthClientRestricted as e:
             # A browser consent page is not proof of API access. Dynamic registrations
             # can mint MCP-only tokens that direct REST endpoints reject with code 1083.
@@ -501,11 +551,35 @@ class Snappy(rumps.App):
                 signing_in=False, auth_mode=st.mode(), oauth_available=False,
                 total_value=None, cash=None, holdings_value=None,
                 positions=[], accounts=[], connections=[],
+                account_count=0,
+                portfolio_status="error",
+                portfolio_error=str(e),
                 notice=str(e),
             )
             print("portfolio refresh failed:", e)
         except Exception as e:
             print("portfolio refresh failed:", e)
+            # Keep the last good portfolio visible, but stop presenting a failed
+            # refresh as fresh data or as a genuine empty account.
+            state.update(
+                portfolio_status="error",
+                portfolio_error=(
+                    "Snappy couldn't load your portfolio from SnapTrade. Retry now, "
+                    "or choose accounts again if it keeps failing."
+                ),
+            )
+
+    def retry_portfolio(self):
+        """Force a fresh read instead of serving a cached empty account list."""
+        if st.mode() is None or state.STATE.get("portfolio_status") == "loading":
+            return
+        state.update(portfolio_status="loading", portfolio_error="")
+
+        def work():
+            st.invalidate()
+            self.refresh_portfolio()
+
+        threading.Thread(target=work, daemon=True).start()
 
     def keep_fresh(self):
         """Re-read the portfolio every 30s, so the panel isn't quoting a stale number.
@@ -624,7 +698,12 @@ class Snappy(rumps.App):
     def start_oauth_signin(self):
         if state.STATE.get("signing_in"):
             return
-        state.update(signing_in=True, notice="Opening your browser to sign in with SnapTrade…")
+        state.update(
+            signing_in=True,
+            portfolio_status="loading",
+            portfolio_error="",
+            notice="Opening your browser to sign in with SnapTrade…",
+        )
         ui.show()
         threading.Thread(target=self._do_signin, daemon=True).start()
 
@@ -641,25 +720,42 @@ class Snappy(rumps.App):
             st.connect()
             state.update(
                 signing_in=False, auth_mode=st.mode(), oauth_available=False,
+                portfolio_status="idle", portfolio_error="",
                 notice=str(e),
             )
             notify(str(e))
             return
         except auth.AuthError as e:
             message = f"Sign-in failed: {e}"
-            state.update(signing_in=False, notice=message)
+            state.update(
+                signing_in=False,
+                portfolio_status="idle",
+                portfolio_error="",
+                notice=message,
+            )
             notify(message)
             return
         except Exception as e:
             print("ERROR signing in:", e)
             message = "Sign-in failed — see the terminal for details."
-            state.update(signing_in=False, notice=message)
+            state.update(
+                signing_in=False,
+                portfolio_status="idle",
+                portfolio_error="",
+                notice=message,
+            )
             notify(message)
             return
 
         access.set_preferred_mode("oauth")
         st.connect(force="oauth")
-        state.update(signing_in=False, auth_mode=st.mode(), oauth_available=True)
+        state.update(
+            signing_in=False,
+            auth_mode=st.mode(),
+            oauth_available=True,
+            portfolio_status="loading",
+            portfolio_error="",
+        )
         notify("Connected to SnapTrade.")
         self.refresh_portfolio()
 
@@ -670,7 +766,9 @@ class Snappy(rumps.App):
             auth_mode=st.mode(),
             oauth_available=False,
             total_value=None, cash=None, holdings_value=None,
-            positions=[], accounts=[], account_count=1,
+            positions=[], accounts=[], account_count=0,
+            connections=[], connection_health=[], unsynced=[], updated_at=None,
+            portfolio_status="idle", portfolio_error="",
         )
         notify("Signed out of SnapTrade.")
 
