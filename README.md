@@ -160,7 +160,8 @@ the menubar while connected; choose **Connect Snappy service** to disconnect the
 SnapTrade access and hosted-service sessions are stored in the macOS Keychain. Brokerage
 credentials are entered only on SnapTrade's site and never pass through Snappy.
 
-Until the hosted service is deployed, put a local Anthropic key in:
+The **Portfolio** tab reads SnapTrade directly and works without an Anthropic key. Until the
+hosted service is deployed, the conversational **Ask** tab needs a local Anthropic key in:
 
 ```text
 ~/Library/Application Support/Snappy/.env

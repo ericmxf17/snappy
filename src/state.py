@@ -24,7 +24,9 @@ STATE = {
     "accounts": [],  # per-account contents, for the expandable Accounts card
     "connections": [],  # brokerage permission state: read or trade
     "connection_health": [],  # normalized passive health status for each brokerage
-    "account_count": 1,  # >1 → the panel stops naming a single brokerage
+    "account_count": 0,  # the number SnapTrade actually returned; never invent one
+    "portfolio_status": "idle",  # idle | loading | ready | no_accounts | error
+    "portfolio_error": "",  # safe, actionable copy shown in the Portfolio tab
     "updated_at": None,  # when the portfolio was last actually re-read
     "unsynced": [],  # filled at the brokerage, not yet in SnapTrade's positions
     "hotkey_ok": True,  # False → the panel explains how to grant Accessibility
